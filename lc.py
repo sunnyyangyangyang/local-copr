@@ -27,7 +27,7 @@ import json
 from datetime import datetime
 
 # --- 配置常量 ---
-MOCK_CONFIG = "fedora-43-x86_64" 
+MOCK_CONFIG = os.getenv("LC_MOCK_CONFIG", "fedora-43-x86_64") 
 tool_name = "lc (Local-Copr)"
 CONFIG_FILE = ".lc_config" # 存储仓库配置（如GPG Key ID）
 
@@ -152,6 +152,10 @@ def do_build(args):
     mock_base_args = ["mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
     if not args.use_ssd:
         mock_base_args.append("--enable-plugin=tmpfs")
+    if args.jobs:
+        print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
+        # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
+        mock_base_args.extend(["--define", f"_smp_mflags -j{args.jobs}"])
 
     # 路径检查 (略)
     if not os.path.isdir(source_dir_origin): sys.exit(1)
@@ -247,6 +251,7 @@ def main():
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
     p_build.add_argument("--use-ssd", action="store_true")
+    p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
