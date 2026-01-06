@@ -150,6 +150,14 @@ def do_build(args):
 
     # Mock 基础参数
     mock_base_args = ["mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
+
+    if not args.enable_network:
+        print(f"[{tool_name}] Offline build mode (default). Use --enable-network to allow network access.")
+        mock_base_args.append("--isolation=simple")
+        mock_base_args.append("--enable-network=False")
+    else:
+        print(f"[{tool_name}] Network access enabled for this build.")
+
     if not args.use_ssd:
         mock_base_args.append("--enable-plugin=tmpfs")
     if args.jobs:
@@ -252,6 +260,7 @@ def main():
     p_build.add_argument("--addrepo", action="append")
     p_build.add_argument("--use-ssd", action="store_true")
     p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
+    p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
