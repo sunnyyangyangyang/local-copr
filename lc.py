@@ -151,6 +151,18 @@ def do_build(args):
     # Mock 基础参数
     mock_base_args = ["mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
 
+    if args.max_mem:
+        # 检查系统是否有 systemd-run
+        if not shutil.which("systemd-run"):
+            print(f"[{tool_name}] Error: --max-mem requires 'systemd-run', but it's not found.")
+            sys.exit(1)
+            
+        print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {args.max_mem}")
+        # 将 systemd-run 命令拼接到 mock 命令列表的最前面
+        # 效果等同于: systemd-run --scope --user -p MemoryMax=4G mock ...
+        wrapper = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={args.max_mem}"]
+        mock_base_args = wrapper + mock_base_args
+
     if not args.enable_network:
         print(f"[{tool_name}] Offline build mode (default). Use --enable-network to allow network access.")
         mock_base_args.append("--isolation=simple")
@@ -261,6 +273,7 @@ def main():
     p_build.add_argument("--use-ssd", action="store_true")
     p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
+    p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run") 
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
