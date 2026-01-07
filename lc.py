@@ -163,10 +163,10 @@ def do_build(args):
         wrapper = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={args.max_mem}"]
         mock_base_args = wrapper + mock_base_args
 
-    if not args.enable_network:
-        print(f"[{tool_name}] Offline build mode (default). Use --enable-network to allow network access.")
-        mock_base_args.append("--isolation=simple")
-        mock_base_args.append("--enable-network=False")
+    if args.enable_network:
+        print(f"[{tool_name}] 🌐 Network access enabled for this build.")
+        # 显式告诉 mock 开启网络
+        mock_base_args.append("--enable-network")
     else:
         print(f"[{tool_name}] Network access enabled for this build.")
 
