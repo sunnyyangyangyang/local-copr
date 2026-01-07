@@ -192,53 +192,108 @@ def do_build(args):
 
     # 工作区
     with tempfile.TemporaryDirectory(prefix="lc-build-") as work_dir:
-        # Step 0: Copy Source to RAM
-        temp_src_dir = os.path.join(work_dir, "clean_sources")
-        shutil.copytree(source_dir_origin, temp_src_dir, dirs_exist_ok=True, 
-                        ignore=shutil.ignore_patterns('.git', '.svn'))
-        rel_spec_path = os.path.relpath(spec_path_origin, source_dir_origin)
-        temp_spec_path = os.path.join(temp_src_dir, rel_spec_path)
+        # 初始化状态变量，防止 UnboundLocalError
+        build_success = False
+        spec_name = os.path.basename(spec_path_origin).replace('.spec','')
+        # 默认日志源是整个工作区（以防在生成 rpm_result 之前就挂了）
+        log_source_dir = work_dir 
+        rpm_result_dir = None 
 
-        # Step A: Spectool
-        run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
+        try:
+            # Step 0: Copy Source to RAM
+            print(f"[{tool_name}] Preparing sources...")
+            temp_src_dir = os.path.join(work_dir, "clean_sources")
+            shutil.copytree(source_dir_origin, temp_src_dir, dirs_exist_ok=True, 
+                            ignore=shutil.ignore_patterns('.git', '.svn'))
+            rel_spec_path = os.path.relpath(spec_path_origin, source_dir_origin)
+            temp_spec_path = os.path.join(temp_src_dir, rel_spec_path)
 
-        # Step B: SRPM
-        srpm_result_dir = os.path.join(work_dir, "srpm_result")
-        os.makedirs(srpm_result_dir)
-        cmd_srpm = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
-        run_cmd(cmd_srpm)
-        src_rpms = glob.glob(os.path.join(srpm_result_dir, "*.src.rpm"))
-        target_srpm = src_rpms[0]
+            # 更新 spec_name 以防万一
+            spec_name = os.path.basename(temp_spec_path).replace('.spec','')
 
-        # Step C: RPM
-        rpm_result_dir = os.path.join(work_dir, "rpm_result")
-        os.makedirs(rpm_result_dir)
-        cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
-        if args.addrepo:
-            for repo in args.addrepo:
-                repo_url = f"file://{os.path.abspath(repo)}" if os.path.exists(repo) else repo
-                cmd_rpm.append(f"--addrepo={repo_url}")
-        run_cmd(cmd_rpm)
+            # Step A: Spectool
+            run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
 
-        # Step D: Move & Collect
-        new_rpms = [] # 记录新生成的 RPM 路径
-        built_rpms = glob.glob(os.path.join(rpm_result_dir, "*.rpm"))
-        for rpm in built_rpms:
-            if "debuginfo" in rpm or rpm.endswith(".src.rpm"): continue
-            dest = shutil.copy2(rpm, repo_dir)
-            new_rpms.append(dest) # 记录目标路径
-            print(f"-> Saved RPM: {os.path.basename(rpm)}")
+            # Step B: SRPM
+            srpm_result_dir = os.path.join(work_dir, "srpm_result")
+            os.makedirs(srpm_result_dir)
+            cmd_srpm: list[str] = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
+            run_cmd(cmd_srpm)
+            src_rpms = glob.glob(os.path.join(srpm_result_dir, "*.src.rpm"))
+            if not src_rpms:
+                raise Exception("SRPM creation failed, no file found.")
+            target_srpm = src_rpms[0]
 
-        # --- 特性 3: GPG 签名 (RPM Level) ---
-        if gpg_key_id:
-            sign_rpms(repo_dir, new_rpms, gpg_key_id)
+            # Step C: RPM
+            rpm_result_dir = os.path.join(work_dir, "rpm_result")
+            os.makedirs(rpm_result_dir)
+            cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
+            if args.addrepo:
+                for repo in args.addrepo:
+                    repo_url = f"file://{os.path.abspath(repo)}" if os.path.exists(repo) else repo
+                    cmd_rpm.append(f"--addrepo={repo_url}")
+            
+            # 执行构建
+            run_cmd(cmd_rpm)
 
-        # Step D+: Archive Logs (略，保持逻辑)
-        logs_dir = os.path.join(repo_dir, ".build_logs")
-        if not os.path.exists(logs_dir): os.makedirs(logs_dir)
-        archive_path = os.path.join(logs_dir, f"{os.path.basename(temp_spec_path).replace('.spec','')}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz")
-        with tarfile.open(archive_path, "w:gz") as tar:
-            tar.add(rpm_result_dir, arcname="build-log")
+            # --- 构建成功逻辑 ---
+            
+            # Step D: Move RPMs to Repo
+            new_rpms = [] 
+            built_rpms = glob.glob(os.path.join(rpm_result_dir, "*.rpm"))
+            for rpm in built_rpms:
+                if "debuginfo" in rpm or rpm.endswith(".src.rpm"): continue
+                dest = shutil.copy2(rpm, repo_dir)
+                new_rpms.append(dest)
+                print(f"-> Saved RPM: {os.path.basename(rpm)}")
+
+            # GPG 签名 (RPM Level)
+            if gpg_key_id:
+                sign_rpms(repo_dir, new_rpms, gpg_key_id)
+            
+            # 构建成功，标记为 True
+            build_success = True
+            # 如果成功，我们通常只关心 rpm_result_dir 里的日志（root.log, build.log 等）
+            # 当然你也可以保持 log_source_dir = work_dir 来保存所有东西
+            log_source_dir = rpm_result_dir
+
+        except Exception as e:
+            print(f"[{tool_name}] ❌ Build Process Error: {e}")
+            build_success = False
+            # 失败时，我们保存整个 work_dir 以便调试（包含源码、srpm等）
+            log_source_dir = work_dir
+
+        finally:
+            # --- 统一的 History/Log 保存逻辑 ---
+            # 只要代码还在这个 finally 块里，work_dir 就没有被删除
+            try:
+                logs_dir = os.path.join(repo_dir, ".build_logs")
+                if not os.path.exists(logs_dir): 
+                    os.makedirs(logs_dir)
+                
+                timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                status_str = "SUCCESS" if build_success else "FAILED"
+                
+                # 创建压缩包
+                archive_name = f"{spec_name}-{status_str}-{timestamp}.tar.gz"
+                archive_path = os.path.join(logs_dir, archive_name)
+                
+                print(f"[{tool_name}] 🗄️  Archiving history ({status_str})...")
+                
+                with tarfile.open(archive_path, "w:gz") as tar:
+                    # arcname 设置为 'build-log' 可以在解压时保持整洁
+                    tar.add(log_source_dir, arcname=f"build-logs-{status_str}")
+                
+                print(f"[{tool_name}] History saved to: {archive_path}")
+
+            except Exception as log_err:
+                print(f"[{tool_name}] Warning: Failed to save history logs: {log_err}")
+
+    # --- with 块结束，work_dir 在此处被自动清理 ---
+
+    # 如果构建失败，在这里退出，不再更新 repodata
+    if not build_success:
+        sys.exit(1)
 
     # Step E: Update Index
     run_cmd(["createrepo_c", "--update", repo_dir])
