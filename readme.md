@@ -5,6 +5,7 @@ A lightweight, secure local RPM build system for Fedora/RHEL-based distributions
 ## Features
 
 - 🏗️ **Local RPM Building** - Build RPMs in isolated mock environments
+- 🔄 **Git Automation** - **Push-to-Build** workflow via `lc-git` hooks
 - 🔐 **GPG Signing Support** - Optional package and repository signing
 - 🛡️ **Resource Control** - Memory and CPU limits for safe builds
 - 🌐 **Network Isolation** - Offline builds by default
@@ -13,9 +14,10 @@ A lightweight, secure local RPM build system for Fedora/RHEL-based distributions
 
 ## Architecture
 
-Local Copr consists of two tools with clear separation of privileges:
+Local Copr consists of three tools with clear separation of duties:
 
 - **`lc`** - Main build tool (runs as regular user)
+- **`lc-git`** - Git integration manager (manages local forges and build triggers)
 - **`lc-add-repo`** - System integration tool (requires sudo)
 
 ## Installation
@@ -23,7 +25,7 @@ Local Copr consists of two tools with clear separation of privileges:
 ### Prerequisites
 
 ```bash
-sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool
+sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool expect git
 ```
 
 ### Install Local Copr
@@ -36,8 +38,9 @@ For now, you can install manually:
 ```bash
 # Temporary manual installation (use at your own risk)
 sudo cp lc /usr/local/bin/
+sudo cp lc-git /usr/local/bin/
 sudo cp lc-add-repo /usr/local/bin/
-sudo chmod +x /usr/local/bin/lc /usr/local/bin/lc-add-repo
+sudo chmod +x /usr/local/bin/lc /usr/local/bin/lc-git /usr/local/bin/lc-add-repo
 
 # Add your user to mock group
 sudo usermod -aG mock $USER
@@ -58,18 +61,26 @@ lc init --repo ~/my-rpms
 lc init --repo ~/my-rpms --gpg-key YOUR_GPG_KEY_ID
 ```
 
-### 2. Build Your First Package
+### 2. Automate with Git (Push-to-Build)
+
+Instead of manually building, create a managed git repo inside your RPM repository:
 
 ```bash
-# Basic build
-lc build --source ~/myproject --torepo ~/my-rpms
-
-# With custom spec file
-lc build --source ~/myproject --spec ~/myproject/custom.spec --torepo ~/my-rpms
-
-# Limit resources
-lc build --source ~/myproject --torepo ~/my-rpms --jobs 4 --max-mem 4G
+# Create a "forge" for your package
+lc-git create my-package --repo ~/my-rpms
 ```
+
+Then, in your source code directory:
+
+```bash
+# Add the local forge as a remote
+git remote add local ~/my-rpms/forges/my-package
+
+# Push to trigger build!
+git push local main
+```
+
+*The build runs in the background. You will see a log file path in your terminal to track progress.*
 
 ### 3. Add Repository to System
 
@@ -91,16 +102,7 @@ sudo dnf install your-package-name
 lc init --repo <path> [--gpg-key <key-id>]
 ```
 
-**Options:**
-- `--repo` - Path to create repository
-- `--gpg-key` - GPG key ID for signing (optional)
-
-**Example:**
-```bash
-lc init --repo ~/rpmbuild/REPOS/myrepo --gpg-key 3AA5C0AD
-```
-
-#### Build Package
+#### Manual Build Package
 
 ```bash
 lc build --source <path> --torepo <repo> [options]
@@ -109,291 +111,124 @@ lc build --source <path> --torepo <repo> [options]
 **Options:**
 - `--source` - Source directory containing spec file and sources
 - `--torepo` - Target repository path
-- `--spec` - Custom spec file path (auto-detected if omitted)
-- `--addrepo` - Additional repositories for dependencies (can be used multiple times)
 - `--jobs` - Limit CPU cores (e.g., `--jobs 4`)
 - `--max-mem` - Limit memory usage (e.g., `--max-mem 4G`)
-- `--enable-network` - Allow network access during build (disabled by default)
+- `--enable-network` - Allow network access during build
 - `--use-ssd` - Build on SSD instead of tmpfs
 
-**Examples:**
+### `lc-git` - Git Automation Commands
+
+Manage "forges" (git repositories) inside your RPM repository. Pushing to these repositories automatically triggers `lc build`.
+
+#### Create a Git Forge
 
 ```bash
-# Basic build
-lc build --source ~/myapp --torepo ~/my-rpms
-
-# Resource-limited build
-lc build --source ~/myapp --torepo ~/my-rpms --jobs 4 --max-mem 4G
-
-# Build with additional repository
-lc build --source ~/myapp --torepo ~/my-rpms --addrepo ~/another-repo
-
-# Network-enabled build (for packages that download during build)
-lc build --source ~/myapp --torepo ~/my-rpms --enable-network
+lc-git create <package-name> --repo <repo-path>
 ```
+Creates a standard git repository at `<repo-path>/forges/<package-name>` with a pre-configured hook.
 
-#### Remove Repository
+#### List Packages
 
 ```bash
-lc remove --repo <path>
+lc-git list --repo <repo-path>
 ```
+Lists all git packages currently managed in the repository.
 
-**Safety:** Requires confirmation and blocks deletion of system directories.
+#### Delete a Git Forge
+
+```bash
+lc-git delete <package-name> --repo <repo-path>
+```
+Removes the git repository from the `forges` directory (does not delete built RPMs).
 
 ### `lc-add-repo` - System Integration Commands
 
-#### Add Repository to System
+#### Add/Remove Repository to System
 
 ```bash
-sudo lc-add-repo add <repo-path> [options]
-```
-
-**Options:**
-- `--name` - Custom repository name (defaults to directory name)
-- `--force` - Overwrite existing repository configuration
-- `--no-refresh` - Skip dnf cache refresh
-
-**Example:**
-```bash
-sudo lc-add-repo add ~/my-rpms --name myrepo
-```
-
-#### Remove Repository from System
-
-```bash
-sudo lc-add-repo remove <repo-name> [--no-refresh]
-```
-
-**Example:**
-```bash
-sudo lc-add-repo remove myrepo
-```
-
-#### List Installed Repositories
-
-```bash
-lc-add-repo list
+sudo lc-add-repo add <repo-path> [--name custom-name]
+sudo lc-add-repo remove <repo-name>
 ```
 
 ## Advanced Usage
 
+### The Git Workflow (Detailed)
+
+`lc-git` creates a **Serverless CI/CD** experience using the filesystem.
+
+1.  **Create**: `lc-git create tool-x --repo ~/repos/main`
+2.  **Push**: When you push to this repo, the `post-receive` hook:
+    *   Resets the repo's working tree to your commit (`git reset --hard`).
+    *   Triggers `lc build` in the background (detached process).
+    *   Redirects output to a timestamped log file.
+3.  **Feedback**: Your terminal immediately shows the log path:
+    ```text
+    remote: [LC] Build triggered in background (PID: 12345).
+    remote: [LC] Live Log: /home/user/repos/main/.build_logs/20260108-120000-abc1234.log
+    ```
+4.  **Monitor**: Watch the build live:
+    ```bash
+    tail -f /home/user/repos/main/.build_logs/20260108-120000-abc1234.log
+    ```
+
 ### GPG Signing Workflow
 
-1. **Generate GPG key** (if you don't have one):
-```bash
-gpg --full-generate-key
-# Select RSA, 4096 bits, no expiration
-# Note your key ID: gpg --list-keys
-```
-
-2. **Initialize signed repository**:
-```bash
-lc init --repo ~/signed-rpms --gpg-key YOUR_KEY_ID
-```
-
-3. **Build packages** (automatically signed):
-```bash
-lc build --source ~/myapp --torepo ~/signed-rpms
-```
-
-4. **Add to system** (GPG key automatically imported):
-```bash
-sudo lc-add-repo add ~/signed-rpms
-```
-
-### Multi-Repository Dependencies
-
-Build packages that depend on other local repositories:
-
-```bash
-lc build --source ~/app \
-         --torepo ~/my-rpms \
-         --addrepo ~/base-rpms \
-         --addrepo ~/libs-rpms
-```
-
-### Resource Management
-
-For large builds on systems with limited resources:
-
-```bash
-# Prevent OOM by limiting memory and cores
-lc build --source ~/big-project \
-         --torepo ~/my-rpms \
-         --jobs 4 \
-         --max-mem 4G
-```
-
-### Build with Network Access
-
-Some packages need to download dependencies during build:
-
-```bash
-lc build --source ~/rust-app \
-         --torepo ~/my-rpms \
-         --enable-network
-```
-
-**⚠️ Warning:** Only use `--enable-network` for trusted sources.
-
-## Configuration
-
-### Environment Variables
-
-- `LC_MOCK_CONFIG` - Override default mock configuration (default: `fedora-43-x86_64`)
-
-```bash
-export LC_MOCK_CONFIG="fedora-42-aarch64"
-lc build --source ~/myapp --torepo ~/my-rpms
-```
-
-### Repository Configuration File
-
-Each repository contains a `.lc_config` file (JSON format):
-
-```json
-{
-  "gpg_key_id": "3AA5C0AD"
-}
-```
+1.  **Initialize**: `lc init --repo ~/secure-rpms --gpg-key YOUR_KEY_ID`
+2.  **Git Trigger**: `lc-git create my-app --repo ~/secure-rpms`
+3.  **Push**: `git push local main`
+    *   The background build will automatically sign the RPMs and the repodata upon completion.
 
 ## Directory Structure
 
 ```
 ~/my-rpms/
 ├── .lc_config              # Repository configuration
-├── .build_logs/            # Archived build logs
+├── .build_logs/            # Build logs (Live & Archived)
+│   ├── 20260108-100000-a1b2c3d.log  # Real-time log from git push
 │   └── package-20260107-123456.tar.gz
-├── RPM-GPG-KEY-local       # Public GPG key (if signing enabled)
-├── local.repo              # Repository configuration template
+├── RPM-GPG-KEY-local       # Public GPG key
+├── local.repo              # Repo config template
 ├── repodata/               # YUM/DNF metadata
-│   ├── repomd.xml
-│   └── repomd.xml.asc      # Signature (if enabled)
-└── *.rpm                   # Built packages
+├── x86_64/                 # Built packages
+└── forges/                 # <--- Managed Git Repositories
+    ├── my-package/         # Normal git repo
+    │   ├── .git/
+    │   ├── my-package.spec
+    │   └── src/
+    └── another-tool/
 ```
 
 ## Security Features
 
 ### Privilege Separation
-- **Build process** runs as regular user
-- **System integration** requires sudo only when needed
+- **Build process (`lc`, `lc-git`)** runs as regular user.
+- **System integration (`lc-add-repo`)** requires sudo only when needed.
 
 ### Network Isolation
-- Builds run **offline by default**
-- Network access requires explicit `--enable-network` flag
-
-### Resource Limits
-- Optional memory caps via `--max-mem`
-- CPU core limits via `--jobs`
-
-### Package Verification
-- Optional GPG signing at package level
-- Optional repository metadata signing
-- Automatic key import on repository installation
+- Builds run **offline by default**.
+- Git builds inherit this default. To enable network for git builds, modify the hook or update `lc` defaults (customization via `.lc_config` coming soon).
 
 ## Troubleshooting
+
+### Git Build Issues
+
+**"remote: [LC] Live Log: ..." but nothing happens?**
+Check the log file mentioned. If the log file is empty or missing, check if `lc` is in your PATH for non-interactive shells.
+
+**"push works but files are empty?"**
+`lc-git` uses `git reset --hard` to synchronize files. Ensure you are pushing to a branch, and the repo was created correctly with `lc-git`.
 
 ### Build Failures
 
 **Check build logs:**
 ```bash
-ls ~/my-rpms/.build_logs/
+# For git builds, check the .log file directly
+cat ~/my-rpms/.build_logs/DATE-TIME-COMMIT.log
+
+# For manual builds, check the tarball
 tar -xzf ~/my-rpms/.build_logs/package-*.tar.gz
 less build-log/build.log
 ```
-
-**Common issues:**
-- Missing BuildRequires → Check spec file dependencies
-- Out of memory → Use `--max-mem` and `--jobs` flags
-- Network access needed → Add `--enable-network` flag
-
-### Mock Configuration
-
-**List available configurations:**
-```bash
-ls /etc/mock/*.cfg
-```
-
-**Use different configuration:**
-```bash
-export LC_MOCK_CONFIG="fedora-rawhide-x86_64"
-lc build --source ~/myapp --torepo ~/my-rpms
-```
-
-### GPG Issues
-
-**Verify GPG key:**
-```bash
-gpg --list-keys YOUR_KEY_ID
-```
-
-**Re-export public key:**
-```bash
-gpg --export --armor YOUR_KEY_ID > ~/my-rpms/RPM-GPG-KEY-local
-```
-
-**Check package signature:**
-```bash
-rpm -K ~/my-rpms/package-1.0-1.fc43.x86_64.rpm
-```
-
-## Comparison with Copr
-
-| Feature | Local Copr (lc) | Fedora Copr |
-|---------|----------------|-------------|
-| Setup | Instant | Requires account |
-| Privacy | 100% local | Public/private repos |
-| Network | Not required | Required |
-| Storage | Your disk | Copr servers |
-| Speed | Local I/O | Network dependent |
-| Use case | Personal/testing | Distribution |
-
-## Examples
-
-### Example 1: Simple Package Build
-
-```bash
-# Setup
-lc init --repo ~/rpms
-
-# Build
-cd ~/myproject
-lc build --source . --torepo ~/rpms
-
-# Install
-sudo lc-add-repo add ~/rpms
-sudo dnf install myproject
-```
-
-### Example 2: Signed Repository
-
-```bash
-# Create signed repo
-lc init --repo ~/secure-rpms --gpg-key 3AA5C0AD
-
-# Build multiple packages
-for project in app1 app2 app3; do
-  lc build --source ~/$project --torepo ~/secure-rpms
-done
-
-# Deploy to system
-sudo lc-add-repo add ~/secure-rpms
-```
-
-### Example 3: Resource-Constrained Build
-
-```bash
-# Build large project with limits
-lc build --source ~/chromium \
-         --torepo ~/rpms \
-         --jobs 4 \
-         --max-mem 8G \
-         --use-ssd
-```
-
-## Contributing
-
-Contributions welcome! This is a lightweight tool designed to stay simple.
 
 ## License
 

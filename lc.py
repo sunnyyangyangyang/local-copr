@@ -149,7 +149,7 @@ def do_build(args):
             pass
 
     # Mock 基础参数
-    mock_base_args = ["mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
+    mock_base_args = ["unbuffer","mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
 
     if args.max_mem:
         # 检查系统是否有 systemd-run
