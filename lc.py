@@ -27,7 +27,6 @@ import json
 from datetime import datetime
 
 # --- 配置常量 ---
-MOCK_CONFIG = os.getenv("LC_MOCK_CONFIG", "fedora-43-x86_64") 
 tool_name = "lc (Local-Copr)"
 CONFIG_FILE = ".lc_config" # 存储仓库配置（如GPG Key ID）
 
@@ -149,7 +148,7 @@ def do_build(args):
             pass
 
     # Mock 基础参数
-    mock_base_args = ["unbuffer","mock", "-r", MOCK_CONFIG, "--define", "_changelog_date_check 0"]
+    mock_base_args = ["unbuffer","mock", "--define", "_changelog_date_check 0"]
 
     if args.max_mem:
         # 检查系统是否有 systemd-run
