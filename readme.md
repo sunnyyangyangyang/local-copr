@@ -23,20 +23,13 @@ Local Copr consists of four tools with clear separation of duties:
 
 ## Installation
 
-### Prerequisites
-
-```bash
-sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool expect git python3-libdnf5
-```
-
-The `lc-rebuild` tool requires `python3-libdnf5` for dependency resolution.
-
 ### Install Local Copr
 
 **Recommended:** Install from official repositories:
 
 ```bash
 # Install the stable release from Copr (recommended)
+sudo dnf copr enable sunnyyang/local-copr
 sudo dnf install lc
 ```
 
@@ -45,6 +38,15 @@ sudo dnf install lc
 ### Manual Installation (Legacy)
 
 For development/testing purposes only, you can manually copy the scripts:
+
+#### Prerequisites
+
+```bash
+sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool expect git python3-libdnf5
+```
+
+The `lc-rebuild` tool requires `python3-libdnf5` for dependency resolution.
+
 
 ```bash
 # Temporary manual installation (use at your own risk)

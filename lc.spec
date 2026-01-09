@@ -18,6 +18,7 @@ Requires:       systemd
 Requires:       dnf
 Requires:       expect
 Requires:       python3-libdnf5
+Requires:       git
 BuildArch:      noarch
 
 %description
