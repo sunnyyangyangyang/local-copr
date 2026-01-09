@@ -14,10 +14,11 @@ A lightweight, secure local RPM build system for Fedora/RHEL-based distributions
 
 ## Architecture
 
-Local Copr consists of three tools with clear separation of duties:
+Local Copr consists of four tools with clear separation of duties:
 
 - **`lc`** - Main build tool (runs as regular user)
-- **`lc-git`** - Git integration manager (manages local forges and build triggers)
+- **`lc-git`** - Git integration manager (manages local forges and build triggers)  
+- **`lc-rebuild`** - Dependency planner for rebuild orchestration
 - **`lc-add-repo`** - System integration tool (requires sudo)
 
 ## Installation
@@ -25,15 +26,25 @@ Local Copr consists of three tools with clear separation of duties:
 ### Prerequisites
 
 ```bash
-sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool expect git
+sudo dnf install mock createrepo_c rpm-build rpmdevtools spectool expect git python3-libdnf5
 ```
+
+The `lc-rebuild` tool requires `python3-libdnf5` for dependency resolution.
 
 ### Install Local Copr
 
-> ⚠️ **Warning:** Manual installation to `/usr/local/bin/` is not recommended for production use.  
-> **RPM package coming soon** for proper system integration!
+**Recommended:** Install from official repositories:
 
-For now, you can install manually:
+```bash
+# Install the stable release from Copr (recommended)
+sudo dnf install lc
+```
+
+> **Official repository:** https://copr.fedorainfracloud.org/coprs/sunnyyang/local-copr/
+
+### Manual Installation (Legacy)
+
+For development/testing purposes only, you can manually copy the scripts:
 
 ```bash
 # Temporary manual installation (use at your own risk)
@@ -47,7 +58,7 @@ sudo usermod -aG mock $USER
 newgrp mock
 ```
 
-**Recommended:** Wait for the official RPM package, or build from source using the provided spec file (coming soon).
+**Note:** Manual installation is not recommended for production use. Use the official RPM package instead.
 
 ## Quick Start
 
@@ -140,6 +151,12 @@ Lists all git packages currently managed in the repository.
 lc-git delete <package-name> --repo <repo-path>
 ```
 Removes the git repository from the `forges` directory (does not delete built RPMs).
+
+### `lc-rebuild` - Dependency Planning Tool
+
+Automatically analyzes package dependencies and generates rebuild plans for library updates.
+
+The tool is integrated into `lc init --enable-rebuild` and works seamlessly with the git automation workflow.
 
 ### `lc-add-repo` - System Integration Commands
 
@@ -242,4 +259,4 @@ Yuanxi (Sunny) Yang
 
 ---
 
-**Note:** Local Copr is designed for personal and development use. For public package distribution, consider using [Fedora Copr](https://copr.fedorainfracloud.org/). 
+**Note:** Local Copr is designed for personal and development use. For public package distribution, consider using [Fedora Copr](https://copr.fedorainfracloud.org/).
