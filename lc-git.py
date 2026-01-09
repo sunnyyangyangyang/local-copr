@@ -44,36 +44,59 @@ def do_create(args):
     
     # 3. 写入 Hook
     hook_path = os.path.join(repo_path, ".git", "hooks", "post-receive")
-    
+    config_file = os.path.join(rpm_repo, ".lc_config")  
+
     # Hook 脚本逻辑：
     # 1. 清洗 Git 变量
     # 2. 切换到工作区 (cd .. 从 .git 出来)
     # 3. 后台执行 lc build
 
     script = f"""#!/bin/bash
-# LC-GIT Hook
+# LC-GIT Smart Hook
 
 while read oldrev newrev refname; do
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
     cd "{repo_path}"
     
-    export PYTHONUNBUFFERED=1
-
-    # 1. 强行同步文件
+    # 同步代码
     git reset --hard "$newrev" >/dev/null
 
-    # 1. 准备日志 (格式: 20260101-120000-abcdef1.log)
+    # 准备日志
     LOG_DIR="{rpm_repo}/.build_logs"
     mkdir -p "$LOG_DIR"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_FILE="$LOG_DIR/$TIMESTAMP-${{newrev:0:7}}.log"
+    LOG_FILE="$LOG_DIR/{name}-$TIMESTAMP-${{newrev:0:7}}.log"
+    PLAN_FILE="$LOG_DIR/{name}-$TIMESTAMP-plan.json"
 
-    # 3. 后台执行，并将输出实时写入日志
-    nohup lc build --source . --torepo "{rpm_repo}" > "$LOG_FILE" 2>&1 &
-    
-    echo "remote: [LC] Build triggered in background (PID: $!)."
-    echo "remote: [LC] Live Log: $LOG_FILE"
-    
+    echo "remote: [LC] 📥 Push received. Log: $LOG_FILE"
+
+    # --- 核心判定逻辑 ---
+    # 使用 Python 解析配置 (比 grep/sed 可靠)
+    IS_REBUILD=$(python3 -c "import json, os; print('yes' if os.path.exists('{config_file}') and json.load(open('{config_file}')).get('auto_rebuild') else 'no')")
+
+    (
+        if [ "$IS_REBUILD" == "yes" ]; then
+            echo "=== 🔄 Auto-Rebuild Enabled ==="
+            echo "1. Planning..."
+            # 调用 Planner
+            lc-rebuild --repo "{rpm_repo}" --trigger "{name}" --output "$PLAN_FILE"
+            
+            if [ $? -eq 0 ]; then
+                echo "2. Executing Chain..."
+                # 调用 Builder (Chain 模式)
+                lc build --torepo "{rpm_repo}" --chain "$PLAN_FILE"
+            else
+                echo "❌ Planning failed. Fallback to single build."
+                lc build --source . --torepo "{rpm_repo}"
+            fi
+        else
+            echo "=== 🔨 Single Build Mode ==="
+            # 调用 Builder (单包模式)
+            lc build --source . --torepo "{rpm_repo}"
+        fi
+    ) > "$LOG_FILE" 2>&1 &
+
+    echo "remote: [LC] Task submitted (PID: $!)."
     break
 done
 """

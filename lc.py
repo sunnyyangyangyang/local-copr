@@ -15,6 +15,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import re
 import os
 import sys
 import argparse
@@ -63,7 +64,17 @@ def do_init(args):
         print(f"-> Exporting public key to {pub_key_path}...")
         with open(pub_key_path, "w") as f:
             subprocess.run(["gpg", "--export", "--armor", gpg_key], stdout=f, check=True)
-    
+
+    # [新增] 保存 Rebuild 设置    
+    if args.enable_rebuild:
+        print(f"[{tool_name}] 🔄 Auto-Rebuild (Chain) Enabled.")
+        config["auto_rebuild"] = True
+    else:
+        config["auto_rebuild"] = False
+        
+    with open(os.path.join(repo_path, CONFIG_FILE), "w") as f:
+        json.dump(config, f)
+
     # 保存 .lc_config
     with open(os.path.join(repo_path, CONFIG_FILE), "w") as f:
         json.dump(config, f)
@@ -131,11 +142,92 @@ def sign_repodata(repo_path, key_id):
         cmd = ["gpg", "--detach-sign", "--armor", "--yes", "--default-key", key_id, repodata_xml]
         run_cmd(cmd)
 
+def _bump_spec_release(spec_path):
+    """
+    修改 Spec 文件，追加基于时间戳的 Patch 号，确保版本单调递增。
+    例如: Release: 1%{?dist} -> Release: 1.p1700000000%{?dist}
+    """
+    import time
+    import re
+    
+    try:
+        with open(spec_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        new_lines = []
+        # 生成一个简短的时间戳 patch 号 (例如 .p1704895000)
+        patch_suffix = f".p{int(time.time())}"
+        changed = False
+
+        # 匹配 Release 行，忽略大小写
+        release_pattern = re.compile(r'^(Release:\s*)(.+?)(%\{\?dist\})?$', re.IGNORECASE)
+
+        for line in lines:
+            match = release_pattern.match(line.strip())
+            if match and not changed:
+                # group(1): "Release: "
+                # group(2): "1" 或 "1.p12345"
+                # group(3): "%{?dist}" 或 None
+                prefix = match.group(1)
+                old_ver = match.group(2).strip()
+                dist_macro = match.group(3) if match.group(3) else ""
+                
+                # 如果以前已经bump过 (包含 .p1...), 我们去掉旧后缀再加新的
+                # 这样保证 git 里无论怎么改，构建出来的总是最新的
+                base_ver = re.sub(r'\.p\d+$', '', old_ver)
+                
+                new_line = f"{prefix}{base_ver}{patch_suffix}{dist_macro}\n"
+                new_lines.append(new_line)
+                print(f"[{tool_name}] 🆙 Version Bump: {old_ver} -> {base_ver}{patch_suffix}")
+                changed = True
+            else:
+                new_lines.append(line)
+        
+        with open(spec_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+            
+    except Exception as e:
+        print(f"[{tool_name}] Warning: Failed to bump spec release: {e}")
+
 def do_build(args):
     """执行构建流程"""
-    source_dir_origin = os.path.abspath(args.source)
     repo_dir = os.path.abspath(args.torepo)
-    
+
+    # --- [新增] Chain Mode 拦截 (线性 Loop) ---
+    if args.chain:
+        print(f"[{tool_name}] ⛓️  Chain Mode Triggered: {args.chain}")
+        try:
+            with open(args.chain) as f:
+                tasks = json.load(f).get('tasks', [])
+        except Exception as e:
+            print(f"Error loading plan: {e}")
+            return False
+
+        total = len(tasks)
+        print(f"[{tool_name}] Total tasks in chain: {total}")
+
+        for idx, task in enumerate(tasks):
+            pkg_name = task['package']
+            print(f"\n[{tool_name}] ⏩ Chain Task ({idx+1}/{total}): {pkg_name}")
+            
+            # 伪装参数，调用自身
+            # 注意：我们要深拷贝 args 或者直接修改，因为是线性执行，直接改没问题
+            args.chain = None # 必须清除，防止递归
+            args.source = os.path.join(repo_dir, "forges", pkg_name)
+            
+            # 递归调用 (复用所有逻辑)
+            if not do_build(args):
+                print(f"[{tool_name}] ❌ Chain broken at {pkg_name}. Stopping.")
+                return False # 中断链条
+            
+            # 注意：do_build 结尾自带 createrepo，所以这里不用写
+            # 下一次循环时，Repo 已经是新的了
+            
+        print(f"[{tool_name}] 🎉 Chain Execution Completed.")
+        return True
+
+    source_dir_origin = os.path.abspath(args.source)
+
     # 读取仓库配置，检查是否启用 GPG
     gpg_key_id = None
     config_path = os.path.join(repo_dir, CONFIG_FILE)
@@ -213,6 +305,11 @@ def do_build(args):
             # Step A: Spectool
             run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
 
+            # --- [新增] 自动 Bump 版本号 ---
+            # 只有在是在 temp_src_dir 下修改，不影响 git 源码
+            # temp_spec_path 是 spectool 之后确定的 spec 路径
+            _bump_spec_release(temp_spec_path)
+
             # Step B: SRPM
             srpm_result_dir = os.path.join(work_dir, "srpm_result")
             os.makedirs(srpm_result_dir)
@@ -227,6 +324,10 @@ def do_build(args):
             rpm_result_dir = os.path.join(work_dir, "rpm_result")
             os.makedirs(rpm_result_dir)
             cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
+        
+            # 关键：无条件注入自己，让依赖能找到
+            cmd_rpm.append(f"--addrepo=file://{repo_dir}")
+
             if args.addrepo:
                 for repo in args.addrepo:
                     repo_url = f"file://{os.path.abspath(repo)}" if os.path.exists(repo) else repo
@@ -292,7 +393,7 @@ def do_build(args):
 
     # 如果构建失败，在这里退出，不再更新 repodata
     if not build_success:
-        sys.exit(1)
+        return False
 
     # Step E: Update Index
     run_cmd(["createrepo_c", "--update", repo_dir])
@@ -302,6 +403,8 @@ def do_build(args):
         sign_repodata(repo_dir, gpg_key_id)
         
     print(f"[{tool_name}] Done!")
+    
+    return True
 
 def main():
     parser = argparse.ArgumentParser(description="Local Copr (lc) - Secure Build Tool")
@@ -311,6 +414,8 @@ def main():
     p_init = subparsers.add_parser("init", help="Init new repo")
     p_init.add_argument("--repo", required=True)
     p_init.add_argument("--gpg-key", help="GPG Key ID to enable signing (e.g. 3AA5C0AD)")
+    p_init.add_argument("--enable-rebuild", action="store_true", help="Enable automatic dependency rebuilds")
+    p_init.set_defaults(func=do_init)
     p_init.set_defaults(func=do_init)
 
     # Delete
@@ -320,17 +425,21 @@ def main():
 
     # Build
     p_build = subparsers.add_parser("build", help="Build RPM")
-    p_build.add_argument("--source", required=True)
+    p_build.add_argument("--source", help="Source dir (required unless --chain)")
     p_build.add_argument("--torepo", required=True)
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
     p_build.add_argument("--use-ssd", action="store_true")
     p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
-    p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run") 
+    p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run")
+    p_build.add_argument("--chain", help="Path to JSON build plan")
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
+    if args.command == 'build':
+        if not args.source and not args.chain:
+            parser.error("Argument error: --source is required unless --chain is specified.")    
     args.func(args)
 
 if __name__ == "__main__":
