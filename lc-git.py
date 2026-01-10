@@ -49,9 +49,6 @@ def do_create(args):
         print(f"[{sys.argv[0]}] Creating git repo at: {repo_path}")
         os.makedirs(repo_path)
         subprocess.run(["git", "init", "-q"], cwd=repo_path, check=True)
-        
-    print(f"[{sys.argv[0]}] Creating git repo at: {repo_path}")
-    os.makedirs(repo_path)
     
     # 1. 初始化普通仓库
     subprocess.run(["git", "init", "-q"], cwd=repo_path, check=True)
