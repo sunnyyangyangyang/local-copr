@@ -261,8 +261,10 @@ def do_build(args):
     else:
         print(f"[{tool_name}] Network access enabled for this build.")
 
-    if not args.use_ssd:
+    if not (args.use_ssd or args.use_tmp_ssd):
         mock_base_args.append("--enable-plugin=tmpfs")
+    if args.use_tmp_ssd:
+        mock_base_args.append("--enable-plugin=tmpfs-tmponly")
     if args.jobs:
         print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
         # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
@@ -430,6 +432,7 @@ def main():
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
     p_build.add_argument("--use-ssd", action="store_true")
+    p_build.add_argument("--use-tmp-ssd", action="store_true")
     p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run")

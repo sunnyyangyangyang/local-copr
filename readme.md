@@ -128,6 +128,19 @@ lc build --source <path> --torepo <repo> [options]
 - `--max-mem` - Limit memory usage (e.g., `--max-mem 4G`)
 - `--enable-network` - Allow network access during build
 - `--use-ssd` - Build on SSD instead of tmpfs
+- `--use-tmp-ssd` - Use selective tmpfs (only `/tmp` on RAM, other operations on SSD)
+
+### Storage Options Comparison
+
+Choose the right storage option based on your system resources and needs:
+
+| Option | Description | Memory Usage | Performance | Best For |
+|--------|-------------|--------------|-------------|----------|
+| Default (tmpfs) | Full build environment in RAM | High (requires ~2GB+ free memory) | Fastest | Systems with abundant RAM |
+| `--use-ssd` | All operations on SSD/HDD | Low | Slower | Limited RAM or large builds |
+| `--use-tmp-ssd` | Only `/tmp` directory in RAM, rest on disk | Medium (requires ~512MB+ free memory) | Balanced | Recommended for most systems |
+
+The selective tmpfs option (`--use-tmp-ssd`) provides the best balance - critical temporary files are stored in fast RAM while other build artifacts use your SSD/HDD storage.
 
 ### `lc-git` - Git Automation Commands
 

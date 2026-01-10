@@ -2,6 +2,13 @@
 """
 lc-rebuild (v3.2) - The Planner (Hybrid Source/Repo Edition)
 High-performance build dependency resolution for Local Copr.
+
+Based on depsolve.py from Fedora Koschei project:
+  Copyright (C) 2014-2016 Red Hat, Inc.
+  Author: Michael Simacek <msimacek@redhat.com>
+  Author: Mikolaj Izdebski <mizdebsk@redhat.com>
+
+Original license: GNU General Public License v2 or later
 """
 
 import os
