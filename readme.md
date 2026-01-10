@@ -144,14 +144,23 @@ The selective tmpfs option (`--use-tmp-ssd`) provides the best balance - critica
 
 ### `lc-git` - Git Automation Commands
 
-Manage "forges" (git repositories) inside your RPM repository. Pushing to these repositories automatically triggers `lc build`.
+Manage "forges" (git repositories) inside your RPM repository. Pushing to—or modifying—these repositories automatically triggers `lc build`.
 
 #### Create a Git Forge
 
+**Option 1: Initialize a new empty repository**
 ```bash
 lc-git create <package-name> --repo <repo-path>
 ```
-Creates a standard git repository at `<repo-path>/forges/<package-name>` with a pre-configured hook.
+Creates a bare-bones git repository at `<repo-path>/forges/<package-name>`.
+
+**Option 2: Clone from an existing remote (e.g., GitHub)**
+```bash
+lc-git create --repo <repo-path> --remote <git-url> [package-name]
+```
+Clones an upstream repository into your local forge.
+*   **Auto-naming:** If `[package-name]` is omitted, the name is derived from the URL (e.g., `user/repo.git` becomes `repo`).
+*   **Triggers:** Configured to trigger builds on **push** (post-receive), **local commit** (post-commit), and **pull/merge** (post-merge). This is ideal for mirroring upstream packages or developing locally.
 
 #### List Packages
 

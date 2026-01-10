@@ -50,9 +50,6 @@ def do_create(args):
         os.makedirs(repo_path)
         subprocess.run(["git", "init", "-q"], cwd=repo_path, check=True)
     
-    # 1. 初始化普通仓库
-    subprocess.run(["git", "init", "-q"], cwd=repo_path, check=True)
-    
     # 2. 关键配置：允许 Push 更新工作区
     # 如果没有这行，Push 到当前分支会被 Git 拒绝
     subprocess.run(["git", "config", "receive.denyCurrentBranch", "updateInstead"], cwd=repo_path, check=True)
