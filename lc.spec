@@ -40,7 +40,7 @@ install -D -m 644 %{SOURCE4} %{buildroot}%{python3_sitelib}/mockbuild/plugins/tm
 %{_bindir}/lc-git
 %{_bindir}/lc-rebuild
 %{python3_sitelib}/mockbuild/plugins/tmpfs_tmponly.py
-%{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.py
+%{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
 * Thu Jan 08 2026 Yuanxi Yang <yxh9956@gmail.com> - 0.1.0-1
