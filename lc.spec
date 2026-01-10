@@ -11,6 +11,7 @@ Source2:        lc-git.py
 Source3:        lc-rebuild.py
 Source4:        tmpfs_tmponly.py
 
+BuildRequires:  python3-devel
 Requires:       python3
 Requires:       mock
 Requires:       createrepo_c
