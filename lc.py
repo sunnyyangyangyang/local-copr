@@ -264,7 +264,7 @@ def do_build(args):
     if not (args.use_ssd or args.use_tmp_ssd):
         mock_base_args.append("--enable-plugin=tmpfs")
     if args.use_tmp_ssd:
-        mock_base_args.append("--enable-plugin=tmpfs-tmponly")
+        mock_base_args.append("--enable-plugin=tmpfs_tmponly")
     if args.jobs:
         print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
         # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
