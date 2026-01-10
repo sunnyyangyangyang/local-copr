@@ -21,7 +21,17 @@ def do_create(args):
     rpm_repo = os.path.abspath(args.repo)
     if not os.path.exists(rpm_repo):
         print(f"Error: RPM Repo {rpm_repo} does not exist. Run 'lc init' first.")
-        sys.exit(1)    
+        sys.exit(1)
+    if not args.name and not args.remote:
+        print("Error: You must provide a NAME or a --remote URL.")
+        sys.exit(1)
+        
+    if not args.name and args.remote:
+        # 从 URL 自动推断名字 (例如 user/repo.git -> repo)
+        base = os.path.basename(args.remote)
+        if base.endswith(".git"):
+            base = base[:-4]
+        args.name = base        
     name = args.name
     validate_name(name)
     
@@ -31,6 +41,14 @@ def do_create(args):
     if os.path.exists(repo_path):
         print(f"Error: Repo {repo_path} already exists.")
         sys.exit(1)
+
+    if args.remote:
+        print(f"[{sys.argv[0]}] Cloning {args.remote} into {repo_path}...")
+        subprocess.run(["git", "clone", args.remote, repo_path], check=True)
+    else:
+        print(f"[{sys.argv[0]}] Creating git repo at: {repo_path}")
+        os.makedirs(repo_path)
+        subprocess.run(["git", "init", "-q"], cwd=repo_path, check=True)
         
     print(f"[{sys.argv[0]}] Creating git repo at: {repo_path}")
     os.makedirs(repo_path)
@@ -54,62 +72,82 @@ def do_create(args):
     script = f"""#!/bin/bash
 # LC-GIT Smart Hook
 
-while read oldrev newrev refname; do
-    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
-    cd "{repo_path}"
-    
-    # 同步代码
+# 获取当前脚本文件名 (post-receive, post-commit, or post-merge)
+HOOK_NAME=$(basename "$0")
+
+# 1. 确定输入源和新版本号
+if [ "$HOOK_NAME" == "post-receive" ]; then
+    # Push 模式：从 stdin 读取 (oldrev newrev refname)
+    read oldrev newrev refname
+else
+    # 本地模式：手动获取 HEAD
+    newrev=$(git rev-parse HEAD)
+fi
+
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+cd "{repo_path}"
+
+# 2. [关键安全修正] 只有 Push 模式才需要强制重置工作区
+if [ "$HOOK_NAME" == "post-receive" ]; then
     git reset --hard "$newrev" >/dev/null
+fi
 
-    # 准备日志
-    LOG_DIR="{rpm_repo}/.build_logs"
-    mkdir -p "$LOG_DIR"
-    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-    LOG_FILE="$LOG_DIR/{name}-$TIMESTAMP-${{newrev:0:7}}.log"
-    PLAN_FILE="$LOG_DIR/{name}-$TIMESTAMP-plan.json"
+# 3. 准备日志与构建
+LOG_DIR="{rpm_repo}/.build_logs"
+mkdir -p "$LOG_DIR"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+LOG_FILE="$LOG_DIR/{name}-$TIMESTAMP-${{newrev:0:7}}.log"
+PLAN_FILE="$LOG_DIR/{name}-$TIMESTAMP-plan.json"
 
-    echo "remote: [LC] 📥 Push received. Log: $LOG_FILE"
+if [ "$HOOK_NAME" == "post-receive" ]; then
+    echo "remote: [LC] 📥 Push received ($newrev). Log: $LOG_FILE"
+else
+    echo "[LC] 🔨 Local change detected ($newrev). Log: $LOG_FILE"
+fi
 
-    # --- 核心判定逻辑 ---
-    # 使用 Python 解析配置 (比 grep/sed 可靠)
-    IS_REBUILD=$(python3 -c "import json, os; print('yes' if os.path.exists('{config_file}') and json.load(open('{config_file}')).get('auto_rebuild') else 'no')")
+# 4. 后台触发构建任务
+IS_REBUILD=$(python3 -c "import json, os; print('yes' if os.path.exists('{config_file}') and json.load(open('{config_file}')).get('auto_rebuild') else 'no')")
 
-    (
-        if [ "$IS_REBUILD" == "yes" ]; then
-            echo "=== 🔄 Auto-Rebuild Enabled ==="
-            echo "1. Planning..."
-            # 调用 Planner
-            lc-rebuild --repo "{rpm_repo}" --trigger "{name}" --output "$PLAN_FILE"
-            
-            if [ $? -eq 0 ]; then
-                echo "2. Executing Chain..."
-                # 调用 Builder (Chain 模式)
-                lc build --torepo "{rpm_repo}" --chain "$PLAN_FILE"
-            else
-                echo "❌ Planning failed. Fallback to single build."
-                lc build --source . --torepo "{rpm_repo}"
-            fi
+(
+    if [ "$IS_REBUILD" == "yes" ]; then
+        echo "=== 🔄 Auto-Rebuild Enabled ==="
+        echo "1. Planning..."
+        lc-rebuild --repo "{rpm_repo}" --trigger "{name}" --output "$PLAN_FILE"
+        
+        if [ $? -eq 0 ]; then
+            echo "2. Executing Chain..."
+            lc build --torepo "{rpm_repo}" --chain "$PLAN_FILE"
         else
-            echo "=== 🔨 Single Build Mode ==="
-            # 调用 Builder (单包模式)
+            echo "❌ Planning failed. Fallback to single build."
             lc build --source . --torepo "{rpm_repo}"
         fi
-    ) > "$LOG_FILE" 2>&1 &
+    else
+        echo "=== 🔨 Single Build Mode ==="
+        lc build --source . --torepo "{rpm_repo}"
+    fi
+) > "$LOG_FILE" 2>&1 &
 
+if [ "$HOOK_NAME" == "post-receive" ]; then
     echo "remote: [LC] Task submitted (PID: $!)."
-    break
-done
+else
+    echo "[LC] Task submitted (PID: $!). Check logs in .build_logs/"
+fi
 """
 
-    with open(hook_path, "w") as f:
-        f.write(script)
+    # [修改点 4] 写入 Hook 到三个位置 (支持本地 commit/merge 和远程 push)
+    hooks_dir = os.path.join(repo_path, ".git", "hooks")
+    target_hooks = ["post-receive", "post-merge", "post-commit"]
     
-    # 赋予执行权限
-    os.chmod(hook_path, 0o755)
+    for hook_name in target_hooks:
+        hook_path = os.path.join(hooks_dir, hook_name)
+        with open(hook_path, "w") as f:
+            f.write(script)
+        os.chmod(hook_path, 0o755)
     
     print(f"[{sys.argv[0]}] Success.")
-    print(f"Usage: git remote add local {repo_path}")
-    print(f"       git push local main")
+    print(f"Hooks installed: {', '.join(target_hooks)}")
+    if not args.remote:
+        print(f"Usage: git remote add local {repo_path}")
 
 def do_delete(args):
     rpm_repo = os.path.abspath(args.repo)
@@ -169,7 +207,8 @@ def main():
     
     # Create command
     p_c = subparsers.add_parser("create", help="Create a new package git repo")
-    p_c.add_argument("name", help="Package name")
+    p_c.add_argument("name", nargs="?", help="Package name (optional if --remote is used)")
+    p_c.add_argument("--remote", help="Clone from an existing remote git URL")
     p_c.add_argument("--repo", required=True, help="Path to Local Copr root")
     p_c.set_defaults(func=do_create)
     
