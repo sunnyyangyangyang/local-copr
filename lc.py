@@ -31,6 +31,42 @@ from datetime import datetime
 tool_name = "lc (Local-Copr)"
 CONFIG_FILE = ".lc_config" # 存储仓库配置（如GPG Key ID）
 
+def parse_size_bytes(size_str):
+    """
+    解析类似 '16G', '512M', '1024' 的字符串为字节整数。
+    如果解析失败或输入是百分比，返回 None。
+    """
+    if not size_str:
+        return None
+    
+    units = {
+        'K': 1024,
+        'M': 1024**2,
+        'G': 1024**3,
+        'T': 1024**4
+    }
+    
+    s = size_str.upper().strip()
+    
+    # 暂不处理百分比（因为不知道 Host 总内存），如果是百分比则忽略 Swap 自动计算
+    if '%' in s:
+        return None
+
+    try:
+        # 纯数字，默认单位 bytes
+        if s.isdigit():
+            return int(s)
+            
+        # 带单位
+        for unit, multiplier in units.items():
+            if s.endswith(unit):
+                number = float(s[:-1])
+                return int(number * multiplier)
+    except:
+        return None
+    
+    return None
+
 def run_cmd(cmd, cwd=None, env=None, capture_output=False):
     """封装 subprocess"""
     if not capture_output:
@@ -189,44 +225,66 @@ def _bump_spec_release(spec_path):
     except Exception as e:
         print(f"[{tool_name}] Warning: Failed to bump spec release: {e}")
 
-def do_build(args):
+def chain(args) :
+    
+    repo_dir = os.path.abspath(args.torepo)
+    print(f"[{tool_name}] ⛓️  Chain Mode Triggered: {args.chain}")
+    try:
+        with open(args.chain) as f:
+            tasks = json.load(f).get('tasks', [])
+    except Exception as e:
+        print(f"Error loading plan: {e}")
+        return False
+
+    total = len(tasks)
+    print(f"[{tool_name}] Total tasks in chain: {total}")
+
+    for idx, task in enumerate(tasks):
+        pkg_name = task['package']
+        print(f"\n[{tool_name}] ⏩ Chain Task ({idx+1}/{total}): {pkg_name}")
+        args.source = os.path.join(repo_dir, "forges", pkg_name)
+        
+        # 递归调用 (复用所有逻辑)
+        if not single_build(args):
+            print(f"[{tool_name}] ❌ Chain broken at {pkg_name}. Stopping.")
+            return False # 中断链条
+        
+        # 注意：do_build 结尾自带 createrepo，所以这里不用写
+        # 下一次循环时，Repo 已经是新的了
+        
+    print(f"[{tool_name}] 🎉 Chain Execution Completed.")
+    return True
+
+def single_build(args):
     """执行构建流程"""
     repo_dir = os.path.abspath(args.torepo)
-
-    # --- [新增] Chain Mode 拦截 (线性 Loop) ---
-    if args.chain:
-        print(f"[{tool_name}] ⛓️  Chain Mode Triggered: {args.chain}")
-        try:
-            with open(args.chain) as f:
-                tasks = json.load(f).get('tasks', [])
-        except Exception as e:
-            print(f"Error loading plan: {e}")
-            return False
-
-        total = len(tasks)
-        print(f"[{tool_name}] Total tasks in chain: {total}")
-
-        for idx, task in enumerate(tasks):
-            pkg_name = task['package']
-            print(f"\n[{tool_name}] ⏩ Chain Task ({idx+1}/{total}): {pkg_name}")
-            
-            # 伪装参数，调用自身
-            # 注意：我们要深拷贝 args 或者直接修改，因为是线性执行，直接改没问题
-            args.chain = None # 必须清除，防止递归
-            args.source = os.path.join(repo_dir, "forges", pkg_name)
-            
-            # 递归调用 (复用所有逻辑)
-            if not do_build(args):
-                print(f"[{tool_name}] ❌ Chain broken at {pkg_name}. Stopping.")
-                return False # 中断链条
-            
-            # 注意：do_build 结尾自带 createrepo，所以这里不用写
-            # 下一次循环时，Repo 已经是新的了
-            
-        print(f"[{tool_name}] 🎉 Chain Execution Completed.")
-        return True
-
     source_dir_origin = os.path.abspath(args.source)
+    # 默认使用 CLI 参数
+    target_mem = args.max_mem
+    target_jobs = args.jobs
+    target_net = args.enable_network
+    target_tmp_ssd = args.use_tmp_ssd
+    target_ssd = args.use_ssd
+    target_extras = []
+    pkg_name = os.path.basename(source_dir_origin)
+
+    # 如果存在 conf，且有对应包的配置，则覆盖
+    if hasattr(args, 'conf') and args.conf and os.path.exists(args.conf):
+        try:
+            with open(args.conf, 'r') as f:
+                # 获取特定包的配置，如果没找到则返回 None
+                p_cfg = json.load(f).get(pkg_name)
+                if p_cfg:
+                    print(f"[{tool_name}] 🎯 Apply config for '{pkg_name}'")
+                    # get(key, default) -> 有则覆盖，无则保持 CLI 原值
+                    target_mem = p_cfg.get("max_mem", target_mem)
+                    target_jobs = p_cfg.get("jobs", target_jobs)
+                    target_net = p_cfg.get("enable_network", target_net)
+                    target_tmp_ssd = p_cfg.get("use_tmp_ssd", target_tmp_ssd)
+                    target_ssd = p_cfg.get("use_ssd", target_ssd)
+                    target_extras = p_cfg.get("extra_mock_args", target_extras)
+        except Exception as e:
+            print(f"[{tool_name}] ⚠️ Config load error: {e}")
 
     # 读取仓库配置，检查是否启用 GPG
     gpg_key_id = None
@@ -242,33 +300,91 @@ def do_build(args):
     # Mock 基础参数
     mock_base_args = ["unbuffer","mock", "--define", "_changelog_date_check 0"]
 
-    if args.max_mem:
-        # 检查系统是否有 systemd-run
-        if not shutil.which("systemd-run"):
-            print(f"[{tool_name}] Error: --max-mem requires 'systemd-run', but it's not found.")
-            sys.exit(1)
+    # if args.max_mem:
+    #     # 检查系统是否有 systemd-run
+    #     if not shutil.which("systemd-run"):
+    #         print(f"[{tool_name}] Error: --max-mem requires 'systemd-run', but it's not found.")
+    #         sys.exit(1)
             
-        print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {args.max_mem}")
-        # 将 systemd-run 命令拼接到 mock 命令列表的最前面
-        # 效果等同于: systemd-run --scope --user -p MemoryMax=4G mock ...
-        wrapper = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={args.max_mem}"]
-        mock_base_args = wrapper + mock_base_args
+    #     print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {args.max_mem}")
+    #     # 将 systemd-run 命令拼接到 mock 命令列表的最前面
+    #     # 效果等同于: systemd-run --scope --user -p MemoryMax=4G mock ...
+    #     wrapper = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={args.max_mem}"]
+    #     mock_base_args = wrapper + mock_base_args
 
-    if args.enable_network:
-        print(f"[{tool_name}] 🌐 Network access enabled for this build.")
-        # 显式告诉 mock 开启网络
+    # if args.enable_network:
+    #     print(f"[{tool_name}] 🌐 Network access enabled for this build.")
+    #     # 显式告诉 mock 开启网络
+    #     mock_base_args.append("--enable-network")
+    # else:
+    #     print(f"[{tool_name}] Network access enabled for this build.")
+
+    # if not (args.use_ssd or args.use_tmp_ssd):
+    #     mock_base_args.append("--enable-plugin=tmpfs")
+    # if args.use_tmp_ssd:
+    #     mock_base_args.append("--enable-plugin=tmpfs_tmponly")
+    # if args.jobs:
+    #     print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
+    #     # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
+    #     mock_base_args.extend(["--define", f"_smp_mflags -j{args.jobs}"])
+    # if target_mem:
+    #     if not shutil.which("systemd-run"):
+    #         print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
+    #         sys.exit(1)
+    #     print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {target_mem}")
+    #     # 拼接到最前
+    #     mock_base_args = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={target_mem}"] + mock_base_args
+    if target_mem:
+            if not shutil.which("systemd-run"):
+                print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
+                sys.exit(1)
+                
+            # 1. 限制物理内存 (MemoryMax)
+            systemd_props = ["-p", f"MemoryMax={target_mem}"]
+            
+            # 2. 计算并限制 Swap (MemorySwapMax) 为 内存的 50%
+            mem_bytes = parse_size_bytes(target_mem)
+            swap_msg = ""
+            
+            if mem_bytes:
+                # 计算 50%
+                swap_bytes = int(mem_bytes * 0.5)
+                systemd_props.extend(["-p", f"MemorySwapMax={swap_bytes}"])
+                
+                # 为了显示好看，转回 G/M
+                if swap_bytes >= 1024**3:
+                    swap_readable = f"{swap_bytes / 1024**3:.1f}G"
+                else:
+                    swap_readable = f"{swap_bytes / 1024**2:.0f}M"
+                swap_msg = f"(+ Swap limit: {swap_readable})"
+            else:
+                # 如果用户输入的是百分比 (e.g. 50%)，我们很难计算具体的一半
+                # 这种情况下，保守起见，可以不设 SwapMax (使用系统默认) 或者设为和 Max 一样
+                # 这里选择不设置，仅提示
+                swap_msg = "(Swap limit: Auto/System Default)"
+
+            print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {target_mem} {swap_msg}")
+
+            # 拼接命令
+            mock_base_args = ["systemd-run", "--scope", "--user", "--quiet"] + systemd_props + mock_base_args    
+
+    if target_net:
+        print(f"[{tool_name}] 🌐 Network access enabled.")
         mock_base_args.append("--enable-network")
-    else:
-        print(f"[{tool_name}] Network access enabled for this build.")
-
-    if not (args.use_ssd or args.use_tmp_ssd):
+    
+    # 显式 SSD 优化
+    if not (target_ssd or target_tmp_ssd):
         mock_base_args.append("--enable-plugin=tmpfs")
-    if args.use_tmp_ssd:
+    if target_tmp_ssd:
         mock_base_args.append("--enable-plugin=tmpfs_tmponly")
-    if args.jobs:
-        print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
-        # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
-        mock_base_args.extend(["--define", f"_smp_mflags -j{args.jobs}"])
+        
+    if target_jobs:
+        print(f"[{tool_name}] Limiting concurrency to: -j{target_jobs}")
+        mock_base_args.extend(["--define", f"_smp_mflags -j{target_jobs}"])
+
+    # 注入额外参数
+    if target_extras:
+        mock_base_args.extend(target_extras)
 
     # 路径检查 (略)
     if not os.path.isdir(source_dir_origin): sys.exit(1)
@@ -408,6 +524,12 @@ def do_build(args):
     
     return True
 
+def do_build(args):
+    if args.chain:
+        return chain(args)
+    else: 
+        return single_build(args)
+
 def main():
     parser = argparse.ArgumentParser(description="Local Copr (lc) - Secure Build Tool")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -437,6 +559,7 @@ def main():
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run")
     p_build.add_argument("--chain", help="Path to JSON build plan")
+    p_build.add_argument("--conf", help="JSON config file for package-specific args") 
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
