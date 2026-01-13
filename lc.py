@@ -259,9 +259,9 @@ def single_build(args):
     """执行构建流程"""
     repo_dir = os.path.abspath(args.torepo)
     source_dir_origin = os.path.abspath(args.source)
+    pkg_name = os.path.basename(source_dir_origin)
     
-    # --- 1. 初始化变量 ---
-    # 默认使用 CLI 参数
+    # --- 1. 变量初始化 ---
     target_mem = args.max_mem
     target_jobs = args.jobs
     target_net = args.enable_network
@@ -269,39 +269,49 @@ def single_build(args):
     target_ssd = args.use_ssd
     target_extras = []
     
-    # [修复] 初始化 repo 列表，防止 CLI 没传参数时为 None
-    target_addrepo = args.addrepo if args.addrepo else []
-    
-    # 获取包名 (目录名即 ID)
-    pkg_name = os.path.basename(source_dir_origin)
+    # 初始化仓库列表 (从 CLI 继承)
+    # 注意：我们要用 list() 复制一份，防止污染全局 args 对象
+    target_addrepo = list(args.addrepo) if args.addrepo else []
 
-    # --- 2. 读取配置文件 (conf.json) ---
-    if hasattr(args, 'conf') and args.conf and os.path.exists(args.conf):
+    # --- 2. 自动定位配置文件 ---
+    conf_path = getattr(args, 'conf', None)
+    if not conf_path:
+        # 默认去 forges/conf.json 找
+        default_conf = os.path.join(repo_dir, "forges", "conf.json")
+        if os.path.exists(default_conf):
+            conf_path = default_conf
+            print(f"[{tool_name}] ℹ️  Auto-detected config: {conf_path}")
+
+    # --- 3. 读取并应用配置 ---
+    if conf_path and os.path.exists(conf_path):
         try:
-            with open(args.conf, 'r') as f:
+            with open(conf_path, 'r') as f:
                 # 获取特定包的配置
-                p_cfg = json.load(f).get(pkg_name)
+                full_config = json.load(f)
+                p_cfg = full_config.get(pkg_name)
                 
                 if p_cfg:
-                    print(f"[{tool_name}] 🎯 Apply config for '{pkg_name}'")
+                    print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
                     # get(key, default) -> 有则覆盖，无则保持 CLI 原值
-                    target_mem = p_cfg.get("max_mem", target_mem)
-                    target_jobs = p_cfg.get("jobs", target_jobs)
-                    target_net = p_cfg.get("enable_network", target_net)
-                    target_tmp_ssd = p_cfg.get("use_tmp_ssd", target_tmp_ssd)
-                    target_ssd = p_cfg.get("use_ssd", target_ssd)
-                    target_extras = p_cfg.get("extra_mock_args", target_extras)
+                    if "max_mem" in p_cfg: target_mem = p_cfg["max_mem"]
+                    if "jobs" in p_cfg: target_jobs = p_cfg["jobs"]
+                    if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
+                    if "use_tmp_ssd" in p_cfg: target_tmp_ssd = p_cfg["use_tmp_ssd"]
+                    if "use_ssd" in p_cfg: target_ssd = p_cfg["use_ssd"]
+                    if "extra_mock_args" in p_cfg: target_extras = p_cfg["extra_mock_args"]
                     
-                    # [修复] 关键逻辑：合并 addrepo
-                    # 我们希望保留 CLI 传入的全局 repo，同时加上包特有的 repo
+                    # [重点] 合并 addrepo
                     conf_repos = p_cfg.get("addrepo", [])
                     if conf_repos:
-                        print(f"[{tool_name}] 📦 Adding {len(conf_repos)} extra repos from config")
+                        print(f"[{tool_name}] 📦 Injecting {len(conf_repos)} extra repos")
                         target_addrepo.extend(conf_repos)
+                else:
+                    print(f"[{tool_name}] ⚠️  No config found for '{pkg_name}' in conf.json")
                         
         except Exception as e:
             print(f"[{tool_name}] ⚠️ Config load error: {e}")
 
+    # --- 4. 准备 Mock 环境 ---
     # 读取仓库配置，检查是否启用 GPG
     gpg_key_id = None
     config_path = os.path.join(repo_dir, CONFIG_FILE)
@@ -314,97 +324,44 @@ def single_build(args):
             pass
 
     # Mock 基础参数
-    mock_base_args = ["unbuffer","mock", "--define", "_changelog_date_check 0"]
+    mock_base_args = ["unbuffer", "mock", "--define", "_changelog_date_check 0"]
 
-    # if args.max_mem:
-    #     # 检查系统是否有 systemd-run
-    #     if not shutil.which("systemd-run"):
-    #         print(f"[{tool_name}] Error: --max-mem requires 'systemd-run', but it's not found.")
-    #         sys.exit(1)
-            
-    #     print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {args.max_mem}")
-    #     # 将 systemd-run 命令拼接到 mock 命令列表的最前面
-    #     # 效果等同于: systemd-run --scope --user -p MemoryMax=4G mock ...
-    #     wrapper = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={args.max_mem}"]
-    #     mock_base_args = wrapper + mock_base_args
-
-    # if args.enable_network:
-    #     print(f"[{tool_name}] 🌐 Network access enabled for this build.")
-    #     # 显式告诉 mock 开启网络
-    #     mock_base_args.append("--enable-network")
-    # else:
-    #     print(f"[{tool_name}] Network access enabled for this build.")
-
-    # if not (args.use_ssd or args.use_tmp_ssd):
-    #     mock_base_args.append("--enable-plugin=tmpfs")
-    # if args.use_tmp_ssd:
-    #     mock_base_args.append("--enable-plugin=tmpfs_tmponly")
-    # if args.jobs:
-    #     print(f"[{tool_name}] Limiting concurrency to: -j{args.jobs}")
-    #     # 覆盖 _smp_mflags 宏，强制 rpmbuild 使用指定核心数
-    #     mock_base_args.extend(["--define", f"_smp_mflags -j{args.jobs}"])
-    # if target_mem:
-    #     if not shutil.which("systemd-run"):
-    #         print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
-    #         sys.exit(1)
-    #     print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {target_mem}")
-    #     # 拼接到最前
-    #     mock_base_args = ["systemd-run", "--scope", "--user", "--quiet", "-p", f"MemoryMax={target_mem}"] + mock_base_args
     if target_mem:
-            if not shutil.which("systemd-run"):
-                print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
-                sys.exit(1)
-                
-            # 1. 限制物理内存 (MemoryMax)
-            systemd_props = ["-p", f"MemoryMax={target_mem}"]
-            
-            # 2. 计算并限制 Swap (MemorySwapMax) 为 内存的 50%
-            mem_bytes = parse_size_bytes(target_mem)
-            swap_msg = ""
-            
-            if mem_bytes:
-                # 计算 50%
-                swap_bytes = int(mem_bytes * 0.5)
-                systemd_props.extend(["-p", f"MemorySwapMax={swap_bytes}"])
-                
-                # 为了显示好看，转回 G/M
-                if swap_bytes >= 1024**3:
-                    swap_readable = f"{swap_bytes / 1024**3:.1f}G"
-                else:
-                    swap_readable = f"{swap_bytes / 1024**2:.0f}M"
-                swap_msg = f"(+ Swap limit: {swap_readable})"
-            else:
-                # 如果用户输入的是百分比 (e.g. 50%)，我们很难计算具体的一半
-                # 这种情况下，保守起见，可以不设 SwapMax (使用系统默认) 或者设为和 Max 一样
-                # 这里选择不设置，仅提示
-                swap_msg = "(Swap limit: Auto/System Default)"
-
-            print(f"[{tool_name}] 🛡️  Enforcing Memory Limit: {target_mem} {swap_msg}")
-
-            # 拼接命令
-            mock_base_args = ["systemd-run", "--scope", "--user", "--quiet"] + systemd_props + mock_base_args    
+        if not shutil.which("systemd-run"):
+            print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
+            sys.exit(1)
+        
+        systemd_props = ["-p", f"MemoryMax={target_mem}"]
+        mem_bytes = parse_size_bytes(target_mem)
+        if mem_bytes:
+            swap_bytes = int(mem_bytes * 0.5)
+            systemd_props.extend(["-p", f"MemorySwapMax={swap_bytes}"])
+        
+        mock_base_args = ["systemd-run", "--scope", "--user", "--quiet"] + systemd_props + mock_base_args    
 
     if target_net:
         print(f"[{tool_name}] 🌐 Network access enabled.")
         mock_base_args.append("--enable-network")
     
-    # 显式 SSD 优化
     if not (target_ssd or target_tmp_ssd):
         mock_base_args.append("--enable-plugin=tmpfs")
     if target_tmp_ssd:
         mock_base_args.append("--enable-plugin=tmpfs_tmponly")
         
     if target_jobs:
-        print(f"[{tool_name}] Limiting concurrency to: -j{target_jobs}")
         mock_base_args.extend(["--define", f"_smp_mflags -j{target_jobs}"])
 
-    # 注入额外参数
     if target_extras:
         mock_base_args.extend(target_extras)
 
-    # 路径检查 (略)
-    if not os.path.isdir(source_dir_origin): sys.exit(1)
-    if not os.path.isdir(repo_dir): sys.exit(1)
+    # 路径检查
+    if not os.path.isdir(source_dir_origin): 
+        print(f"Error: Source dir {source_dir_origin} not found")
+        return False
+        
+    if not os.path.isdir(repo_dir): 
+        print(f"Error: Repo dir {repo_dir} not found")
+        return False
 
     # 确定 Spec
     spec_file_arg = args.spec
@@ -412,67 +369,69 @@ def single_build(args):
         spec_path_origin = os.path.abspath(spec_file_arg)
     else:
         specs = glob.glob(os.path.join(source_dir_origin, "*.spec"))
-        if not specs: sys.exit(1)
+        if not specs: 
+            print("Error: No spec file found")
+            return False
         spec_path_origin = specs[0]
 
-    # 工作区
+    # --- 5. 开始构建 ---
     with tempfile.TemporaryDirectory(prefix="lc-build-") as work_dir:
-        # 初始化状态变量，防止 UnboundLocalError
         build_success = False
         spec_name = os.path.basename(spec_path_origin).replace('.spec','')
-        # 默认日志源是整个工作区（以防在生成 rpm_result 之前就挂了）
         log_source_dir = work_dir 
         rpm_result_dir = None 
 
         try:
-            # Step 0: Copy Source to RAM
-            print(f"[{tool_name}] Preparing sources...")
+            print(f"[{tool_name}] Preparing sources for {pkg_name}...")
             temp_src_dir = os.path.join(work_dir, "clean_sources")
             shutil.copytree(source_dir_origin, temp_src_dir, dirs_exist_ok=True, 
                             ignore=shutil.ignore_patterns('.git', '.svn'))
             rel_spec_path = os.path.relpath(spec_path_origin, source_dir_origin)
             temp_spec_path = os.path.join(temp_src_dir, rel_spec_path)
-
-            # 更新 spec_name 以防万一
             spec_name = os.path.basename(temp_spec_path).replace('.spec','')
 
-            # Step A: Spectool
+            # Spectool
             run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
-
-            # --- [新增] 自动 Bump 版本号 ---
-            # 只有在是在 temp_src_dir 下修改，不影响 git 源码
-            # temp_spec_path 是 spectool 之后确定的 spec 路径
+            
+            # Version Bump
             _bump_spec_release(temp_spec_path)
 
-            # Step B: SRPM
+            # SRPM
             srpm_result_dir = os.path.join(work_dir, "srpm_result")
             os.makedirs(srpm_result_dir)
-            cmd_srpm: list[str] = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
+            cmd_srpm = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
             run_cmd(cmd_srpm)
             src_rpms = glob.glob(os.path.join(srpm_result_dir, "*.src.rpm"))
-            if not src_rpms:
-                raise Exception("SRPM creation failed, no file found.")
+            if not src_rpms: raise Exception("SRPM creation failed")
             target_srpm = src_rpms[0]
 
-            # Step C: RPM
+            # RPM
             rpm_result_dir = os.path.join(work_dir, "rpm_result")
             os.makedirs(rpm_result_dir)
+            
+            # 组装构建命令
             cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
         
-            # 关键：无条件注入自己，让依赖能找到
+            # [关键] 注入本地 Repo
             cmd_rpm.append(f"--addrepo=file://{repo_dir}")
 
-            if args.addrepo:
-                for repo in args.addrepo:
-                    repo_url = f"file://{os.path.abspath(repo)}" if os.path.exists(repo) else repo
+            # [关键] 注入外部 Repos (CLI + Conf)
+            if target_addrepo:
+                print(f"[{tool_name}] 🔗 Active repositories for build:")
+                for repo in target_addrepo:
+                    # 如果是本地路径，必须转为 file://
+                    if os.path.exists(repo):
+                        repo_url = f"file://{os.path.abspath(repo)}"
+                    else:
+                        repo_url = repo
+                    
+                    print(f"  -> {repo_url}")
                     cmd_rpm.append(f"--addrepo={repo_url}")
             
-            # 执行构建
+            # 执行
             run_cmd(cmd_rpm)
 
-            # --- 构建成功逻辑 ---
-            
-            # Step D: Move RPMs to Repo
+            # 保存结果
             new_rpms = [] 
             built_rpms = glob.glob(os.path.join(rpm_result_dir, "*.rpm"))
             for rpm in built_rpms:
@@ -481,65 +440,38 @@ def single_build(args):
                 new_rpms.append(dest)
                 print(f"-> Saved RPM: {os.path.basename(rpm)}")
 
-            # GPG 签名 (RPM Level)
             if gpg_key_id:
                 sign_rpms(repo_dir, new_rpms, gpg_key_id)
             
-            # 构建成功，标记为 True
             build_success = True
-            # 如果成功，我们通常只关心 rpm_result_dir 里的日志（root.log, build.log 等）
-            # 当然你也可以保持 log_source_dir = work_dir 来保存所有东西
             log_source_dir = rpm_result_dir
 
         except Exception as e:
-            print(f"[{tool_name}] ❌ Build Process Error: {e}")
+            print(f"[{tool_name}] ❌ Build Failed: {e}")
             build_success = False
-            # 失败时，我们保存整个 work_dir 以便调试（包含源码、srpm等）
             log_source_dir = work_dir
 
         finally:
-            # --- 统一的 History/Log 保存逻辑 ---
-            # 只要代码还在这个 finally 块里，work_dir 就没有被删除
             try:
                 logs_dir = os.path.join(repo_dir, ".build_logs")
-                if not os.path.exists(logs_dir): 
-                    os.makedirs(logs_dir)
-                
+                if not os.path.exists(logs_dir): os.makedirs(logs_dir)
                 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
                 status_str = "SUCCESS" if build_success else "FAILED"
-                
-                # 创建压缩包
-                archive_name = f"{spec_name}-{status_str}-{timestamp}.tar.gz"
+                archive_name = f"{pkg_name}-{status_str}-{timestamp}.tar.gz"
                 archive_path = os.path.join(logs_dir, archive_name)
-                
-                print(f"[{tool_name}] 🗄️  Archiving history ({status_str})...")
-                
                 with tarfile.open(archive_path, "w:gz") as tar:
-                    # arcname 设置为 'build-log' 可以在解压时保持整洁
                     tar.add(log_source_dir, arcname=f"build-logs-{status_str}")
-                
-                print(f"[{tool_name}] History saved to: {archive_path}")
-
+                print(f"[{tool_name}] Log saved: {archive_path}")
             except Exception as log_err:
-                print(f"[{tool_name}] Warning: Failed to save history logs: {log_err}")
+                print(f"[{tool_name}] Log error: {log_err}")
 
-    # --- with 块结束，work_dir 在此处被自动清理 ---
+    if not build_success: return False
 
-    # 如果构建失败，在这里退出，不再更新 repodata
-    if not build_success:
-        return False
-
-    # Step E: Update Index
     run_cmd(["createrepo_c", "--update", repo_dir])
-    
-    # --- 特性 4: GPG 签名 (Repo Level) ---
-    if gpg_key_id:
-        sign_repodata(repo_dir, gpg_key_id)
+    if gpg_key_id: sign_repodata(repo_dir, gpg_key_id)
         
-    print(f"[{tool_name}] Done!")
-    
+    print(f"[{tool_name}] Package '{pkg_name}' done!")
     return True
-
 def do_build(args):
     if args.chain:
         return chain(args)
