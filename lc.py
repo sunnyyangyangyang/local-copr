@@ -259,6 +259,8 @@ def single_build(args):
     """执行构建流程"""
     repo_dir = os.path.abspath(args.torepo)
     source_dir_origin = os.path.abspath(args.source)
+    
+    # --- 1. 初始化变量 ---
     # 默认使用 CLI 参数
     target_mem = args.max_mem
     target_jobs = args.jobs
@@ -266,14 +268,20 @@ def single_build(args):
     target_tmp_ssd = args.use_tmp_ssd
     target_ssd = args.use_ssd
     target_extras = []
+    
+    # [修复] 初始化 repo 列表，防止 CLI 没传参数时为 None
+    target_addrepo = args.addrepo if args.addrepo else []
+    
+    # 获取包名 (目录名即 ID)
     pkg_name = os.path.basename(source_dir_origin)
 
-    # 如果存在 conf，且有对应包的配置，则覆盖
+    # --- 2. 读取配置文件 (conf.json) ---
     if hasattr(args, 'conf') and args.conf and os.path.exists(args.conf):
         try:
             with open(args.conf, 'r') as f:
-                # 获取特定包的配置，如果没找到则返回 None
+                # 获取特定包的配置
                 p_cfg = json.load(f).get(pkg_name)
+                
                 if p_cfg:
                     print(f"[{tool_name}] 🎯 Apply config for '{pkg_name}'")
                     # get(key, default) -> 有则覆盖，无则保持 CLI 原值
@@ -283,6 +291,14 @@ def single_build(args):
                     target_tmp_ssd = p_cfg.get("use_tmp_ssd", target_tmp_ssd)
                     target_ssd = p_cfg.get("use_ssd", target_ssd)
                     target_extras = p_cfg.get("extra_mock_args", target_extras)
+                    
+                    # [修复] 关键逻辑：合并 addrepo
+                    # 我们希望保留 CLI 传入的全局 repo，同时加上包特有的 repo
+                    conf_repos = p_cfg.get("addrepo", [])
+                    if conf_repos:
+                        print(f"[{tool_name}] 📦 Adding {len(conf_repos)} extra repos from config")
+                        target_addrepo.extend(conf_repos)
+                        
         except Exception as e:
             print(f"[{tool_name}] ⚠️ Config load error: {e}")
 
