@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-lc-rebuild (v4.0) - The Planner (Clean Architecture)
-Convention:
-  - Folder Name in 'forges/' is the unique Package ID (pkg_id).
-  - conf.json keys MUST match Folder Names.
-  - Automatically maps all RPM subpackages to their parent Folder ID.
-  - No Regex Fallback: Relies purely on valid spec parsing.
+lc-rebuild (v3.2) - The Planner (Hybrid Source/Repo Edition)
+High-performance build dependency resolution for Local Copr.
+
+Based on depsolve.py from Fedora Koschei project:
+  Copyright (C) 2014-2016 Red Hat, Inc.
+  Author: Michael Simacek <msimacek@redhat.com>
+  Author: Mikolaj Izdebski <mizdebsk@redhat.com>
+
+Original license: GNU General Public License v2 or later
 """
 
 import os
