@@ -2,6 +2,8 @@
 
 A lightweight, secure local RPM build system for Fedora/RHEL-based distributions. Build and manage your own RPM repositories without needing Copr infrastructure.
 
+This tool was developed with help of AI.
+
 ## Features
 
 - 🏗️ **Local RPM Building** - Build RPMs in isolated mock environments
