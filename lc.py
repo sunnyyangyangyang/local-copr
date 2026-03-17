@@ -107,9 +107,6 @@ def do_init(args):
         config["auto_rebuild"] = True
     else:
         config["auto_rebuild"] = False
-        
-    with open(os.path.join(repo_path, CONFIG_FILE), "w") as f:
-        json.dump(config, f)
 
     # 保存 .lc_config
     with open(os.path.join(repo_path, CONFIG_FILE), "w") as f:
@@ -487,7 +484,6 @@ def main():
     p_init.add_argument("--repo", required=True)
     p_init.add_argument("--gpg-key", help="GPG Key ID to enable signing (e.g. 3AA5C0AD)")
     p_init.add_argument("--enable-rebuild", action="store_true", help="Enable automatic dependency rebuilds")
-    p_init.set_defaults(func=do_init)
     p_init.set_defaults(func=do_init)
 
     # Delete
