@@ -344,22 +344,38 @@ def single_build(args):
             print(f"[{tool_name}] ⚠️  Could not auto-detect mock config, using default")
     else:
         print(f"[{tool_name}] ℹ️  Using mock config: {mock_config}")
-    
+
     if mock_config:
         mock_base_args.extend(["--config", mock_config])
 
+    # 构建 nspawn 资源限制，直接通过 mock --configopts 传入
+    # 避免 systemd-run --scope 无法穿透到 nspawn 子容器的问题
+    nspawn_args = []
+
     if target_mem:
-        if not shutil.which("systemd-run"):
-            print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
-            sys.exit(1)
-        
-        systemd_props = ["-p", f"MemoryMax={target_mem}"]
         mem_bytes = parse_size_bytes(target_mem)
         if mem_bytes:
-            swap_bytes = int(mem_bytes * 0.5)
-            systemd_props.extend(["-p", f"MemorySwapMax={swap_bytes}"])
-        
-        mock_base_args = ["systemd-run", "--scope", "--user", "--quiet"] + systemd_props + mock_base_args    
+            # systemd-nspawn --memory-max 接受 human-readable 格式
+            nspawn_args.append(f"--memory-max={target_mem}")
+            # MemorySwapMax (cgroup v2) = memory + swap 的总和
+            # 这里给 50% 额外 swap：swap_max = mem * 1.5
+            swap_total = int(mem_bytes * 1.5)
+            # nspawn --swap-max 也接受 human-readable
+            if swap_total >= 1024**3:
+                nspawn_args.append(f"--swap-max={swap_total // (1024**3)}G")
+            else:
+                nspawn_args.append(f"--swap-max={swap_total // (1024**2)}M")
+
+    if target_jobs:
+        # CPUQuota: 1 核 = 100%，4 核 = 400%
+        cpu_quota = target_jobs * 100
+        nspawn_args.append(f"--cpu-quota={cpu_quota}")
+
+    if nspawn_args:
+        # 通过 --configopts 注入 nspawn_args 到 mock 配置
+        args_str = repr(nspawn_args)
+        mock_base_args.extend(["--configopts", f"nspawn_args={args_str}"])
+        print(f"[{tool_name}] 🔒 Resource limits via nspawn: {nspawn_args}")    
 
     if target_net:
         print(f"[{tool_name}] 🌐 Network access enabled.")
