@@ -34,49 +34,34 @@ CONFIG_FILE = ".lc_config" # 存储仓库配置（如GPG Key ID）
 def detect_mock_config():
     """自动检测当前系统对应的 mock 配置"""
     try:
-        # 通过 rpm 查询 fedora-release 获取版本和架构
-        release = run_cmd(["rpm", "-E", "%{fedora}"], capture_output=True)
-        arch = run_cmd(["rpm", "-E", "%{_arch}"], capture_output=True)
-        cfg = f"fedora-{release}-{arch}"
-        return cfg
+        os_release = {}
+        with open("/etc/os-release", "r") as f:
+            for line in f:
+                if "=" in line:
+                    key, val = line.strip().split("=", 1)
+                    os_release[key] = val.strip('"').strip("'")
+
+        distro_id = os_release.get("ID", "").lower()
+        version_id = os_release.get("VERSION_ID", "").lower()
+        arch = os_release.get("BASEARCH", "") or run_cmd(["uname", "-m"], capture_output=True)
+
+        # 特殊映射
+        name_map = {
+            "centos": "centos-stream",
+            "oracle": "oraclelinux",
+            "ol": "oraclelinux",
+            "amazon": "amazonlinux",
+            "amzn": "amazonlinux",
+        }
+        cfg_name = name_map.get(distro_id, distro_id)
+
+        cfg_path = f"/etc/mock/{cfg_name}-{version_id}-{arch}.cfg"
+        if os.path.exists(cfg_path):
+            return f"{cfg_name}-{version_id}-{arch}"
+
+        return None
     except Exception:
         return None
-
-def parse_size_bytes(size_str):
-    """
-    解析类似 '16G', '512M', '1024' 的字符串为字节整数。
-    如果解析失败或输入是百分比，返回 None。
-    """
-    if not size_str:
-        return None
-    
-    units = {
-        'K': 1024,
-        'M': 1024**2,
-        'G': 1024**3,
-        'T': 1024**4
-    }
-    
-    s = size_str.upper().strip()
-    
-    # 暂不处理百分比（因为不知道 Host 总内存），如果是百分比则忽略 Swap 自动计算
-    if '%' in s:
-        return None
-
-    try:
-        # 纯数字，默认单位 bytes
-        if s.isdigit():
-            return int(s)
-            
-        # 带单位
-        for unit, multiplier in units.items():
-            if s.endswith(unit):
-                number = float(s[:-1])
-                return int(number * multiplier)
-    except:
-        return None
-    
-    return None
 
 def run_cmd(cmd, cwd=None, env=None, capture_output=False):
     """封装 subprocess"""
@@ -270,7 +255,6 @@ def single_build(args):
     pkg_name = os.path.basename(source_dir_origin)
     
     # --- 1. 变量初始化 ---
-    target_mem = args.max_mem
     target_jobs = args.jobs
     target_net = args.enable_network
     target_tmp_ssd = args.use_tmp_ssd
@@ -301,7 +285,6 @@ def single_build(args):
                 if p_cfg:
                     print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
                     # get(key, default) -> 有则覆盖，无则保持 CLI 原值
-                    if "max_mem" in p_cfg: target_mem = p_cfg["max_mem"]
                     if "jobs" in p_cfg: target_jobs = p_cfg["jobs"]
                     if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
                     if "use_tmp_ssd" in p_cfg: target_tmp_ssd = p_cfg["use_tmp_ssd"]
@@ -346,36 +329,10 @@ def single_build(args):
         print(f"[{tool_name}] ℹ️  Using mock config: {mock_config}")
 
     if mock_config:
-        mock_base_args.extend(["--config", mock_config])
+        mock_base_args.extend(["-r", mock_config])
 
-    # 构建 nspawn 资源限制，直接通过 mock --configopts 传入
-    # 避免 systemd-run --scope 无法穿透到 nspawn 子容器的问题
-    nspawn_args = []
-
-    if target_mem:
-        mem_bytes = parse_size_bytes(target_mem)
-        if mem_bytes:
-            # systemd-nspawn --memory-max 接受 human-readable 格式
-            nspawn_args.append(f"--memory-max={target_mem}")
-            # MemorySwapMax (cgroup v2) = memory + swap 的总和
-            # 这里给 50% 额外 swap：swap_max = mem * 1.5
-            swap_total = int(mem_bytes * 1.5)
-            # nspawn --swap-max 也接受 human-readable
-            if swap_total >= 1024**3:
-                nspawn_args.append(f"--swap-max={swap_total // (1024**3)}G")
-            else:
-                nspawn_args.append(f"--swap-max={swap_total // (1024**2)}M")
-
-    if target_jobs:
-        # CPUQuota: 1 核 = 100%，4 核 = 400%
-        cpu_quota = target_jobs * 100
-        nspawn_args.append(f"--cpu-quota={cpu_quota}")
-
-    if nspawn_args:
-        # 通过 --configopts 注入 nspawn_args 到 mock 配置
-        args_str = repr(nspawn_args)
-        mock_base_args.extend(["--configopts", f"nspawn_args={args_str}"])
-        print(f"[{tool_name}] 🔒 Resource limits via nspawn: {nspawn_args}")    
+    # TODO: nspawn resource limits via temp config file
+    # --config-opts can't handle list types, need proper config override    
 
     if target_net:
         print(f"[{tool_name}] 🌐 Network access enabled.")
@@ -542,7 +499,6 @@ def main():
     p_build.add_argument("--use-tmp-ssd", action="store_true")
     p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
-    p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run")
     p_build.add_argument("--chain", help="Path to JSON build plan")
     p_build.add_argument("--conf", help="JSON config file for package-specific args")
     p_build.add_argument("--mock-config", help="Mock chroot config (e.g. fedora-44-x86_64, auto-detected by default)")

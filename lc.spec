@@ -1,6 +1,6 @@
 Name:           lc
-Version:        1.3
-Release:        4%{?dist}
+Version:        1.4
+Release:        5%{?dist}
 Summary:        Local Copr - A lightweight local RPM build system
 License:        GPLv3+
 URL:            https://github.com/sunnyyangyangyang/local-copr
