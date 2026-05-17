@@ -255,7 +255,6 @@ def single_build(args):
     pkg_name = os.path.basename(source_dir_origin)
     
     # --- 1. 变量初始化 ---
-    target_jobs = args.jobs
     target_net = args.enable_network
     target_tmp_ssd = args.use_tmp_ssd
     target_ssd = args.use_ssd
@@ -285,7 +284,6 @@ def single_build(args):
                 if p_cfg:
                     print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
                     # get(key, default) -> 有则覆盖，无则保持 CLI 原值
-                    if "jobs" in p_cfg: target_jobs = p_cfg["jobs"]
                     if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
                     if "use_tmp_ssd" in p_cfg: target_tmp_ssd = p_cfg["use_tmp_ssd"]
                     if "use_ssd" in p_cfg: target_ssd = p_cfg["use_ssd"]
@@ -343,9 +341,6 @@ def single_build(args):
     if target_tmp_ssd:
         mock_base_args.append("--enable-plugin=tmpfs_tmponly")
         
-    if target_jobs:
-        mock_base_args.extend(["--define", f"_smp_mflags -j{target_jobs}"])
-
     if target_extras:
         mock_base_args.extend(target_extras)
 
@@ -497,7 +492,6 @@ def main():
     p_build.add_argument("--addrepo", action="append")
     p_build.add_argument("--use-ssd", action="store_true")
     p_build.add_argument("--use-tmp-ssd", action="store_true")
-    p_build.add_argument("--jobs", type=int, help="Limit build cores (e.g. 8 to prevent OOM)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.add_argument("--chain", help="Path to JSON build plan")
     p_build.add_argument("--conf", help="JSON config file for package-specific args")
