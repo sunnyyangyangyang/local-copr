@@ -31,6 +31,17 @@ from datetime import datetime
 tool_name = "lc (Local-Copr)"
 CONFIG_FILE = ".lc_config" # 存储仓库配置（如GPG Key ID）
 
+def detect_mock_config():
+    """自动检测当前系统对应的 mock 配置"""
+    try:
+        # 通过 rpm 查询 fedora-release 获取版本和架构
+        release = run_cmd(["rpm", "-E", "%{fedora}"], capture_output=True)
+        arch = run_cmd(["rpm", "-E", "%{_arch}"], capture_output=True)
+        cfg = f"fedora-{release}-{arch}"
+        return cfg
+    except Exception:
+        return None
+
 def parse_size_bytes(size_str):
     """
     解析类似 '16G', '512M', '1024' 的字符串为字节整数。
@@ -323,6 +334,20 @@ def single_build(args):
     # Mock 基础参数
     mock_base_args = ["unbuffer", "mock", "--define", "_changelog_date_check 0"]
 
+    # 确定 mock 配置
+    mock_config = getattr(args, 'mock_config', None)
+    if not mock_config:
+        mock_config = detect_mock_config()
+        if mock_config:
+            print(f"[{tool_name}] ℹ️  Auto-detected mock config: {mock_config}")
+        else:
+            print(f"[{tool_name}] ⚠️  Could not auto-detect mock config, using default")
+    else:
+        print(f"[{tool_name}] ℹ️  Using mock config: {mock_config}")
+    
+    if mock_config:
+        mock_base_args.extend(["--config", mock_config])
+
     if target_mem:
         if not shutil.which("systemd-run"):
             print(f"[{tool_name}] Error: --max-mem requires 'systemd-run'")
@@ -503,7 +528,8 @@ def main():
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.add_argument("--max-mem", help="Limit max memory (e.g. 4G, 512M) using systemd-run")
     p_build.add_argument("--chain", help="Path to JSON build plan")
-    p_build.add_argument("--conf", help="JSON config file for package-specific args") 
+    p_build.add_argument("--conf", help="JSON config file for package-specific args")
+    p_build.add_argument("--mock-config", help="Mock chroot config (e.g. fedora-44-x86_64, auto-detected by default)")
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
