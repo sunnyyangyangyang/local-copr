@@ -256,10 +256,14 @@ def single_build(args):
     
     # --- 1. 变量初始化 ---
     target_net = args.enable_network
-    target_tmp_ssd = args.use_tmp_ssd
-    target_ssd = args.use_ssd
+    storage_mode = getattr(args, 'storage', None) or "tmpfs"
     target_extras = []
-    
+
+    # CLI extra-mock-args 先加进来
+    cli_extras = getattr(args, 'extra_mock_args', None)
+    if cli_extras:
+        target_extras.extend(cli_extras)
+
     # 初始化仓库列表 (从 CLI 继承)
     # 注意：我们要用 list() 复制一份，防止污染全局 args 对象
     target_addrepo = list(args.addrepo) if args.addrepo else []
@@ -285,9 +289,8 @@ def single_build(args):
                     print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
                     # get(key, default) -> 有则覆盖，无则保持 CLI 原值
                     if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
-                    if "use_tmp_ssd" in p_cfg: target_tmp_ssd = p_cfg["use_tmp_ssd"]
-                    if "use_ssd" in p_cfg: target_ssd = p_cfg["use_ssd"]
-                    if "extra_mock_args" in p_cfg: target_extras = p_cfg["extra_mock_args"]
+                    if "storage" in p_cfg: storage_mode = p_cfg["storage"]
+                    if "extra_mock_args" in p_cfg: target_extras.extend(p_cfg["extra_mock_args"])
                     
                     # [重点] 合并 addrepo
                     conf_repos = p_cfg.get("addrepo", [])
@@ -336,11 +339,16 @@ def single_build(args):
         print(f"[{tool_name}] 🌐 Network access enabled.")
         mock_base_args.append("--enable-network")
     
-    if not (target_ssd or target_tmp_ssd):
-        mock_base_args.append("--enable-plugin=tmpfs")
-    if target_tmp_ssd:
-        mock_base_args.append("--enable-plugin=tmpfs_tmponly")
-        
+    # Storage mode for tmpfs plugin
+    storage_map = {
+        "tmpfs": "--enable-plugin=tmpfs",
+        "tmpfs-tmponly": "--enable-plugin=tmpfs_tmponly",
+        "ssd": None,  # No tmpfs plugin, use disk directly
+    }
+    storage_flag = storage_map.get(storage_mode)
+    if storage_flag:
+        mock_base_args.append(storage_flag)
+
     if target_extras:
         mock_base_args.extend(target_extras)
 
@@ -490,8 +498,10 @@ def main():
     p_build.add_argument("--torepo", required=True)
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
-    p_build.add_argument("--use-ssd", action="store_true")
-    p_build.add_argument("--use-tmp-ssd", action="store_true")
+    p_build.add_argument("--storage", choices=["tmpfs", "tmpfs-tmponly", "ssd"], default="tmpfs",
+                         help="Storage backend (default: tmpfs)")
+    p_build.add_argument("--extra-mock-args", action="append",
+                         help="Extra args to pass directly to mock (can be used multiple times)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
     p_build.add_argument("--chain", help="Path to JSON build plan")
     p_build.add_argument("--conf", help="JSON config file for package-specific args")

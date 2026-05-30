@@ -1,6 +1,6 @@
 Name:           lc
-Version:        1.4
-Release:        6%{?dist}
+Version:        1.5
+Release:        1%{?dist}
 Summary:        Local Copr - A lightweight local RPM build system
 License:        GPLv3+
 URL:            https://github.com/sunnyyangyangyang/local-copr
@@ -45,5 +45,9 @@ install -D -m 644 %{SOURCE4} %{buildroot}%{python3_sitelib}/mockbuild/plugins/tm
 %{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
+* Sat May 30 2026 Yuanxi Yang <yxh9956@gmail.com> - 1.5-1
+- Add --extra-mock-args to pass args directly to mock
+- Merge --use-ssd/--use-tmp-ssd into --storage with choices: tmpfs, tmpfs-tmponly, ssd
+
 * Thu Jan 08 2026 Yuanxi Yang <yxh9956@gmail.com> - 0.1.0-1
 - Initial self-hosted package
