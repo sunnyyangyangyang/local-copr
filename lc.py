@@ -73,7 +73,7 @@ def run_cmd(cmd, cwd=None, env=None, capture_output=False):
         subprocess.run(cmd, cwd=cwd, env=env, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}") from e
 
 def do_init(args):
     """初始化仓库"""
@@ -312,7 +312,7 @@ def single_build(args):
             with open(config_path, "r") as f:
                 cfg = json.load(f)
                 gpg_key_id = cfg.get("gpg_key_id")
-        except:
+        except Exception:
             pass
 
     # Mock 基础参数
