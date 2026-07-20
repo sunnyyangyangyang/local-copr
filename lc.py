@@ -97,13 +97,6 @@ def do_init(args):
         with open(pub_key_path, "w") as f:
             subprocess.run(["gpg", "--export", "--armor", gpg_key], stdout=f, check=True)
 
-    # [新增] 保存 Rebuild 设置    
-    if args.enable_rebuild:
-        print(f"[{tool_name}] 🔄 Auto-Rebuild (Chain) Enabled.")
-        config["auto_rebuild"] = True
-    else:
-        config["auto_rebuild"] = False
-
     # 保存 .lc_config
     with open(os.path.join(repo_path, CONFIG_FILE), "w") as f:
         json.dump(config, f)
@@ -217,36 +210,6 @@ def _bump_spec_release(spec_path):
             
     except Exception as e:
         print(f"[{tool_name}] Warning: Failed to bump spec release: {e}")
-
-def chain(args) :
-    
-    repo_dir = os.path.abspath(args.torepo)
-    print(f"[{tool_name}] ⛓️  Chain Mode Triggered: {args.chain}")
-    try:
-        with open(args.chain) as f:
-            tasks = json.load(f).get('tasks', [])
-    except Exception as e:
-        print(f"Error loading plan: {e}")
-        return False
-
-    total = len(tasks)
-    print(f"[{tool_name}] Total tasks in chain: {total}")
-
-    for idx, task in enumerate(tasks):
-        pkg_name = task['package']
-        print(f"\n[{tool_name}] ⏩ Chain Task ({idx+1}/{total}): {pkg_name}")
-        args.source = os.path.join(repo_dir, "forges", pkg_name)
-        
-        # 递归调用 (复用所有逻辑)
-        if not single_build(args):
-            print(f"[{tool_name}] ❌ Chain broken at {pkg_name}. Stopping.")
-            return False # 中断链条
-        
-        # 注意：do_build 结尾自带 createrepo，所以这里不用写
-        # 下一次循环时，Repo 已经是新的了
-        
-    print(f"[{tool_name}] 🎉 Chain Execution Completed.")
-    return True
 
 def single_build(args):
     """执行构建流程"""
@@ -471,10 +434,7 @@ def single_build(args):
     print(f"[{tool_name}] Package '{pkg_name}' done!")
     return True
 def do_build(args):
-    if args.chain:
-        return chain(args)
-    else: 
-        return single_build(args)
+    return single_build(args)
 
 def main():
     parser = argparse.ArgumentParser(description="Local Copr (lc) - Secure Build Tool")
@@ -484,7 +444,6 @@ def main():
     p_init = subparsers.add_parser("init", help="Init new repo")
     p_init.add_argument("--repo", required=True)
     p_init.add_argument("--gpg-key", help="GPG Key ID to enable signing (e.g. 3AA5C0AD)")
-    p_init.add_argument("--enable-rebuild", action="store_true", help="Enable automatic dependency rebuilds")
     p_init.set_defaults(func=do_init)
 
     # Delete
@@ -494,7 +453,7 @@ def main():
 
     # Build
     p_build = subparsers.add_parser("build", help="Build RPM")
-    p_build.add_argument("--source", help="Source dir (required unless --chain)")
+    p_build.add_argument("--source", required=True, help="Source directory containing spec and sources")
     p_build.add_argument("--torepo", required=True)
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
@@ -503,15 +462,11 @@ def main():
     p_build.add_argument("--extra-mock-args", action="append",
                          help="Extra args to pass directly to mock (can be used multiple times)")
     p_build.add_argument("--enable-network", action="store_true", help="Allow network access during build (default: offline)")
-    p_build.add_argument("--chain", help="Path to JSON build plan")
     p_build.add_argument("--conf", help="JSON config file for package-specific args")
     p_build.add_argument("--mock-config", help="Mock chroot config (e.g. fedora-44-x86_64, auto-detected by default)")
     p_build.set_defaults(func=do_build)
 
     args = parser.parse_args()
-    if args.command == 'build':
-        if not args.source and not args.chain:
-            parser.error("Argument error: --source is required unless --chain is specified.")    
     args.func(args)
 
 if __name__ == "__main__":
