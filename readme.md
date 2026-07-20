@@ -184,6 +184,13 @@ Options:
 sudo lc-add-repo remove <repo-name>
 ```
 
+#### Refresh Repository Metadata
+
+```bash
+lc-add-repo refresh <repo-path>
+```
+Updates repository metadata with `createrepo_c --update --no-database` and re-signs repodata if GPG is configured. Useful after manually adding RPMs to a repo directory.
+
 #### List Local Copr Repositories
 
 ```bash

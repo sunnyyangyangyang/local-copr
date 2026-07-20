@@ -205,6 +205,51 @@ def do_remove(args):
         print(f"Error: Failed to remove repository: {e}")
         sys.exit(1)
 
+def do_refresh(args):
+    """刷新仓库元数据（createrepo_c + GPG 签名）"""
+    repo_path = os.path.abspath(args.repo)
+
+    if not os.path.isdir(repo_path):
+        print(f"Error: {repo_path} is not a directory")
+        sys.exit(1)
+
+    repodata_path = os.path.join(repo_path, "repodata")
+    if not os.path.exists(repodata_path):
+        print(f"Error: {repo_path} does not contain repodata/")
+        sys.exit(1)
+
+    config = load_repo_config(repo_path)
+    gpg_key_id = config.get("gpg_key_id")
+
+    print(f"Refreshing repository metadata: {repo_path}")
+
+    # 1. createrepo_c --update --no-database .
+    try:
+        subprocess.run(
+            ["createrepo_c", "--update", "--no-database", "."],
+            cwd=repo_path, check=True
+        )
+        print("✓ Repository metadata updated")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to update repository metadata: {e}")
+        sys.exit(1)
+
+    # 2. GPG sign repomd.xml（如果有配置 key）
+    if gpg_key_id:
+        repomd = os.path.join(repo_path, "repodata", "repomd.xml")
+        try:
+            subprocess.run(
+                ["gpg", "--detach-sign", "--armor", "--yes",
+                 "--output", str(repomd) + ".asc", str(repomd)],
+                cwd=repo_path, check=True
+            )
+            print(f"✓ repodata signed with key {gpg_key_id}")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Failed to sign repodata: {e}")
+
+    print("✓ Repository metadata refreshed")
+
+
 def do_list(args):
     """列出所有 lc 管理的仓库"""
     print("Local Copr repositories in system:")
@@ -251,14 +296,19 @@ def main():
     p_remove.add_argument("--no-refresh", action="store_true", help="Skip cache refresh")
     p_remove.set_defaults(func=do_remove)
     
+    # Refresh command
+    p_refresh = subparsers.add_parser("refresh", help="Refresh repository metadata")
+    p_refresh.add_argument("repo", help="Path to the lc repository")
+    p_refresh.set_defaults(func=do_refresh)
+
     # List command
     p_list = subparsers.add_parser("list", help="List Local Copr repositories")
     p_list.set_defaults(func=do_list)
-    
+
     args = parser.parse_args()
-    
-    # list 命令不需要 root
-    if args.command != "list":
+
+    # list 和 refresh 不需要 root
+    if args.command not in ("list", "refresh"):
         check_root()
     
     args.func(args)
