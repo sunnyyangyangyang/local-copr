@@ -1,5 +1,5 @@
 Name:           lc
-Version:        1.7
+Version:        2.0
 Release:        1%{?dist}
 Summary:        Local Copr - A lightweight local RPM build system
 License:        GPLv3+
@@ -37,9 +37,10 @@ install -D -m 644 %{SOURCE2} %{buildroot}%{python3_sitelib}/mockbuild/plugins/tm
 %{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
-* Mon Jul 20 2026 Yuanxi Yang <yxh9956@gmail.com> - 1.7-1
+* Mon Jul 20 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.0-1
 - Remove lc-rebuild and lc-git tools (chain/rebuild/git features)
 - Simplify CLI: --source is now required for build
+- Add lc-add-repo refresh subcommand for repo metadata update
 
 * Sat May 30 2026 Yuanxi Yang <yxh9956@gmail.com> - 1.6-1
 - Fix chain mode: replace sys.exit with exception for proper error handling
