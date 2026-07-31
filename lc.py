@@ -213,226 +213,257 @@ def _bump_spec_release(spec_path):
 
 def single_build(args):
     """执行构建流程"""
-    repo_dir = os.path.abspath(args.torepo)
-    source_dir_origin = os.path.abspath(args.source)
-    pkg_name = os.path.basename(source_dir_origin)
-    
-    # --- 1. 变量初始化 ---
-    target_net = args.enable_network
-    storage_mode = getattr(args, 'storage', None) or "tmpfs"
-    target_extras = []
-
-    # CLI extra-mock-args 先加进来
-    cli_extras = getattr(args, 'extra_mock_args', None)
-    if cli_extras:
-        target_extras.extend(cli_extras)
-
-    # 初始化仓库列表 (从 CLI 继承)
-    # 注意：我们要用 list() 复制一份，防止污染全局 args 对象
-    target_addrepo = list(args.addrepo) if args.addrepo else []
-
-    # --- 2. 自动定位配置文件 ---
-    conf_path = getattr(args, 'conf', None)
-    if not conf_path:
-        # 默认去 forges/conf.json 找
-        default_conf = os.path.join(repo_dir, "forges", "conf.json")
-        if os.path.exists(default_conf):
-            conf_path = default_conf
-            print(f"[{tool_name}] ℹ️  Auto-detected config: {conf_path}")
-
-    # --- 3. 读取并应用配置 ---
-    if conf_path and os.path.exists(conf_path):
-        try:
-            with open(conf_path, 'r') as f:
-                # 获取特定包的配置
-                full_config = json.load(f)
-                p_cfg = full_config.get(pkg_name)
-                
-                if p_cfg:
-                    print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
-                    # get(key, default) -> 有则覆盖，无则保持 CLI 原值
-                    if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
-                    if "storage" in p_cfg: storage_mode = p_cfg["storage"]
-                    if "extra_mock_args" in p_cfg: target_extras.extend(p_cfg["extra_mock_args"])
-                    
-                    # [重点] 合并 addrepo
-                    conf_repos = p_cfg.get("addrepo", [])
-                    if conf_repos:
-                        print(f"[{tool_name}] 📦 Injecting {len(conf_repos)} extra repos")
-                        target_addrepo.extend(conf_repos)
-                else:
-                    print(f"[{tool_name}] ⚠️  No config found for '{pkg_name}' in conf.json")
-                        
-        except Exception as e:
-            print(f"[{tool_name}] ⚠️ Config load error: {e}")
-
-    # --- 4. 准备 Mock 环境 ---
-    # 读取仓库配置，检查是否启用 GPG
-    gpg_key_id = None
-    config_path = os.path.join(repo_dir, CONFIG_FILE)
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r") as f:
-                cfg = json.load(f)
-                gpg_key_id = cfg.get("gpg_key_id")
-        except Exception:
-            pass
-
-    # Mock 基础参数
-    mock_base_args = ["unbuffer", "mock", "--define", "_changelog_date_check 0"]
-
-    # 确定 mock 配置
-    mock_config = getattr(args, 'mock_config', None)
-    if not mock_config:
-        mock_config = detect_mock_config()
-        if mock_config:
-            print(f"[{tool_name}] ℹ️  Auto-detected mock config: {mock_config}")
-        else:
-            print(f"[{tool_name}] ⚠️  Could not auto-detect mock config, using default")
-    else:
-        print(f"[{tool_name}] ℹ️  Using mock config: {mock_config}")
-
-    if mock_config:
-        mock_base_args.extend(["-r", mock_config])
-
-    # TODO: nspawn resource limits via temp config file
-    # --config-opts can't handle list types, need proper config override    
-
-    if target_net:
-        print(f"[{tool_name}] 🌐 Network access enabled.")
-        mock_base_args.append("--enable-network")
-    
-    # Storage mode for tmpfs plugin
-    storage_map = {
-        "tmpfs": "--enable-plugin=tmpfs",
-        "tmpfs-tmponly": "--enable-plugin=tmpfs_tmponly",
-        "ssd": None,  # No tmpfs plugin, use disk directly
-    }
-    storage_flag = storage_map.get(storage_mode)
-    if storage_flag:
-        mock_base_args.append(storage_flag)
-
-    if target_extras:
-        mock_base_args.extend(target_extras)
-
-    # 路径检查
-    if not os.path.isdir(source_dir_origin): 
-        print(f"Error: Source dir {source_dir_origin} not found")
-        return False
-        
-    if not os.path.isdir(repo_dir): 
-        print(f"Error: Repo dir {repo_dir} not found")
+    # 1. 检查参数：至少要传 --source 或 --spec 之一
+    if not args.source and not args.spec:
+        print(f"[{tool_name}] Error: At least one of --source or --spec must be specified.")
         return False
 
-    # 确定 Spec
-    spec_file_arg = args.spec
-    if spec_file_arg:
-        spec_path_origin = os.path.abspath(spec_file_arg)
-    else:
-        specs = glob.glob(os.path.join(source_dir_origin, "*.spec"))
-        if not specs: 
-            print("Error: No spec file found")
+    # 2. 如果只有 --spec，在 /tmp 下自动创建随机文件夹并把 spec 复制过去
+    temp_source_created = None
+    if not args.source and args.spec:
+        spec_abs = os.path.abspath(args.spec)
+        if not os.path.isfile(spec_abs):
+            print(f"[{tool_name}] Error: Spec file '{args.spec}' not found.")
             return False
-        spec_path_origin = specs[0]
-
-    # --- 5. 开始构建 ---
-    with tempfile.TemporaryDirectory(prefix="lc-build-") as work_dir:
-        build_success = False
-        spec_name = os.path.basename(spec_path_origin).replace('.spec','')
-        log_source_dir = work_dir 
-        rpm_result_dir = None 
-
-        try:
-            print(f"[{tool_name}] Preparing sources for {pkg_name}...")
-            temp_src_dir = os.path.join(work_dir, "clean_sources")
-            shutil.copytree(source_dir_origin, temp_src_dir, dirs_exist_ok=True, 
-                            ignore=shutil.ignore_patterns('.git', '.svn'))
-            rel_spec_path = os.path.relpath(spec_path_origin, source_dir_origin)
-            temp_spec_path = os.path.join(temp_src_dir, rel_spec_path)
-            spec_name = os.path.basename(temp_spec_path).replace('.spec','')
-
-            # Spectool
-            run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
-            
-            # Version Bump
-            _bump_spec_release(temp_spec_path)
-
-            # SRPM
-            srpm_result_dir = os.path.join(work_dir, "srpm_result")
-            os.makedirs(srpm_result_dir)
-            cmd_srpm = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
-            run_cmd(cmd_srpm)
-            src_rpms = glob.glob(os.path.join(srpm_result_dir, "*.src.rpm"))
-            if not src_rpms: raise Exception("SRPM creation failed")
-            target_srpm = src_rpms[0]
-
-            # RPM
-            rpm_result_dir = os.path.join(work_dir, "rpm_result")
-            os.makedirs(rpm_result_dir)
-            
-            # 组装构建命令
-            cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
         
-            # [关键] 注入本地 Repo
-            cmd_rpm.append(f"--addrepo=file://{repo_dir}")
+        spec_filename = os.path.basename(spec_abs)
+        pkg_name = os.path.splitext(spec_filename)[0]
+        # 创建 prefix 为 lc-source- 的随机临时目录
+        temp_source_created = tempfile.mkdtemp(prefix="lc-source-")
+        dest_spec = os.path.join(temp_source_created, spec_filename)
+        shutil.copy2(spec_abs, dest_spec)
+        
+        args.source = temp_source_created
+        args.spec = dest_spec
+    else:
+        pkg_name = os.path.basename(os.path.abspath(args.source))
 
-            # [关键] 注入外部 Repos (CLI + Conf)
-            if target_addrepo:
-                print(f"[{tool_name}] 🔗 Active repositories for build:")
-                for repo in target_addrepo:
-                    # 如果是本地路径，必须转为 file://
-                    if os.path.exists(repo):
-                        repo_url = f"file://{os.path.abspath(repo)}"
-                    else:
-                        repo_url = repo
-                    
-                    print(f"  -> {repo_url}")
-                    cmd_rpm.append(f"--addrepo={repo_url}")
-            
-            # 执行
-            run_cmd(cmd_rpm)
+    # 3. 原有构建逻辑包在 try...finally 中，确保退出时清理临时文件夹
+    try:
+        repo_dir = os.path.abspath(args.torepo)
+        source_dir_origin = os.path.abspath(args.source)
+        
+        # --- 1. 变量初始化 ---
+        target_net = args.enable_network
+        storage_mode = getattr(args, 'storage', None) or "tmpfs"
+        target_extras = []
 
-            # 保存结果
-            new_rpms = [] 
-            built_rpms = glob.glob(os.path.join(rpm_result_dir, "*.rpm"))
-            for rpm in built_rpms:
-                if "debuginfo" in rpm or rpm.endswith(".src.rpm"): continue
-                dest = shutil.copy2(rpm, repo_dir)
-                new_rpms.append(dest)
-                print(f"-> Saved RPM: {os.path.basename(rpm)}")
+        # CLI extra-mock-args 先加进来
+        cli_extras = getattr(args, 'extra_mock_args', None)
+        if cli_extras:
+            target_extras.extend(cli_extras)
 
-            if gpg_key_id:
-                sign_rpms(repo_dir, new_rpms, gpg_key_id)
-            
-            build_success = True
-            log_source_dir = rpm_result_dir
+        # 初始化仓库列表 (从 CLI 继承)
+        # 注意：我们要用 list() 复制一份，防止污染全局 args 对象
+        target_addrepo = list(args.addrepo) if args.addrepo else []
 
-        except Exception as e:
-            print(f"[{tool_name}] ❌ Build Failed: {e}")
-            build_success = False
-            log_source_dir = work_dir
+        # --- 2. 自动定位配置文件 ---
+        conf_path = getattr(args, 'conf', None)
+        if not conf_path:
+            # 默认去 forges/conf.json 找
+            default_conf = os.path.join(repo_dir, "forges", "conf.json")
+            if os.path.exists(default_conf):
+                conf_path = default_conf
+                print(f"[{tool_name}] ℹ️  Auto-detected config: {conf_path}")
 
-        finally:
+        # --- 3. 读取并应用配置 ---
+        if conf_path and os.path.exists(conf_path):
             try:
-                logs_dir = os.path.join(repo_dir, ".build_logs")
-                if not os.path.exists(logs_dir): os.makedirs(logs_dir)
-                timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-                status_str = "SUCCESS" if build_success else "FAILED"
-                archive_name = f"{pkg_name}-{status_str}-{timestamp}.tar.gz"
-                archive_path = os.path.join(logs_dir, archive_name)
-                with tarfile.open(archive_path, "w:gz") as tar:
-                    tar.add(log_source_dir, arcname=f"build-logs-{status_str}")
-                print(f"[{tool_name}] Log saved: {archive_path}")
-            except Exception as log_err:
-                print(f"[{tool_name}] Log error: {log_err}")
+                with open(conf_path, 'r') as f:
+                    # 获取特定包的配置
+                    full_config = json.load(f)
+                    p_cfg = full_config.get(pkg_name)
+                    
+                    if p_cfg:
+                        print(f"[{tool_name}] 🎯 Applying config for '{pkg_name}'")
+                        # get(key, default) -> 有则覆盖，无则保持 CLI 原值
+                        if "enable_network" in p_cfg: target_net = p_cfg["enable_network"]
+                        if "storage" in p_cfg: storage_mode = p_cfg["storage"]
+                        if "extra_mock_args" in p_cfg: target_extras.extend(p_cfg["extra_mock_args"])
+                        
+                        # [重点] 合并 addrepo
+                        conf_repos = p_cfg.get("addrepo", [])
+                        if conf_repos:
+                            print(f"[{tool_name}] 📦 Injecting {len(conf_repos)} extra repos")
+                            target_addrepo.extend(conf_repos)
+                    else:
+                        print(f"[{tool_name}] ⚠️  No config found for '{pkg_name}' in conf.json")
+                            
+            except Exception as e:
+                print(f"[{tool_name}] ⚠️ Config load error: {e}")
 
-    if not build_success: return False
+        # --- 4. 准备 Mock 环境 ---
+        # 读取仓库配置，检查是否启用 GPG
+        gpg_key_id = None
+        config_path = os.path.join(repo_dir, CONFIG_FILE)
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    cfg = json.load(f)
+                    gpg_key_id = cfg.get("gpg_key_id")
+            except Exception:
+                pass
 
-    run_cmd(["createrepo_c", "--update", repo_dir])
-    if gpg_key_id: sign_repodata(repo_dir, gpg_key_id)
+        # Mock 基础参数
+        mock_base_args = ["unbuffer", "mock", "--define", "_changelog_date_check 0"]
+
+        # 确定 mock 配置
+        mock_config = getattr(args, 'mock_config', None)
+        if not mock_config:
+            mock_config = detect_mock_config()
+            if mock_config:
+                print(f"[{tool_name}] ℹ️  Auto-detected mock config: {mock_config}")
+            else:
+                print(f"[{tool_name}] ⚠️  Could not auto-detect mock config, using default")
+        else:
+            print(f"[{tool_name}] ℹ️  Using mock config: {mock_config}")
+
+        if mock_config:
+            mock_base_args.extend(["-r", mock_config])
+
+        # TODO: nspawn resource limits via temp config file
+        # --config-opts can't handle list types, need proper config override    
+
+        if target_net:
+            print(f"[{tool_name}] 🌐 Network access enabled.")
+            mock_base_args.append("--enable-network")
         
-    print(f"[{tool_name}] Package '{pkg_name}' done!")
-    return True
+        # Storage mode for tmpfs plugin
+        storage_map = {
+            "tmpfs": "--enable-plugin=tmpfs",
+            "tmpfs-tmponly": "--enable-plugin=tmpfs_tmponly",
+            "ssd": None,  # No tmpfs plugin, use disk directly
+        }
+        storage_flag = storage_map.get(storage_mode)
+        if storage_flag:
+            mock_base_args.append(storage_flag)
+
+        if target_extras:
+            mock_base_args.extend(target_extras)
+
+        # 路径检查
+        if not os.path.isdir(source_dir_origin): 
+            print(f"Error: Source dir {source_dir_origin} not found")
+            return False
+            
+        if not os.path.isdir(repo_dir): 
+            print(f"Error: Repo dir {repo_dir} not found")
+            return False
+
+        # 确定 Spec
+        spec_file_arg = args.spec
+        if spec_file_arg:
+            spec_path_origin = os.path.abspath(spec_file_arg)
+        else:
+            specs = glob.glob(os.path.join(source_dir_origin, "*.spec"))
+            if not specs: 
+                print("Error: No spec file found")
+                return False
+            spec_path_origin = specs[0]
+
+        # --- 5. 开始构建 ---
+        with tempfile.TemporaryDirectory(prefix="lc-build-") as work_dir:
+            build_success = False
+            spec_name = os.path.basename(spec_path_origin).replace('.spec','')
+            log_source_dir = work_dir 
+            rpm_result_dir = None 
+
+            try:
+                print(f"[{tool_name}] Preparing sources for {pkg_name}...")
+                temp_src_dir = os.path.join(work_dir, "clean_sources")
+                shutil.copytree(source_dir_origin, temp_src_dir, dirs_exist_ok=True, 
+                                ignore=shutil.ignore_patterns('.git', '.svn'))
+                rel_spec_path = os.path.relpath(spec_path_origin, source_dir_origin)
+                temp_spec_path = os.path.join(temp_src_dir, rel_spec_path)
+                spec_name = os.path.basename(temp_spec_path).replace('.spec','')
+
+                # Spectool
+                run_cmd(["spectool", "-g", "-C", temp_src_dir, temp_spec_path], cwd=temp_src_dir)
+                
+                # Version Bump
+                _bump_spec_release(temp_spec_path)
+
+                # SRPM
+                srpm_result_dir = os.path.join(work_dir, "srpm_result")
+                os.makedirs(srpm_result_dir)
+                cmd_srpm = mock_base_args + ["--buildsrpm", "--spec", temp_spec_path, "--sources", temp_src_dir, "--resultdir", srpm_result_dir]
+                run_cmd(cmd_srpm)
+                src_rpms = glob.glob(os.path.join(srpm_result_dir, "*.src.rpm"))
+                if not src_rpms: raise Exception("SRPM creation failed")
+                target_srpm = src_rpms[0]
+
+                # RPM
+                rpm_result_dir = os.path.join(work_dir, "rpm_result")
+                os.makedirs(rpm_result_dir)
+                
+                # 组装构建命令
+                cmd_rpm = mock_base_args + ["--rebuild", target_srpm, "--resultdir", rpm_result_dir]
+            
+                # [关键] 注入本地 Repo
+                cmd_rpm.append(f"--addrepo=file://{repo_dir}")
+
+                # [关键] 注入外部 Repos (CLI + Conf)
+                if target_addrepo:
+                    print(f"[{tool_name}] 🔗 Active repositories for build:")
+                    for repo in target_addrepo:
+                        # 如果是本地路径，必须转为 file://
+                        if os.path.exists(repo):
+                            repo_url = f"file://{os.path.abspath(repo)}"
+                        else:
+                            repo_url = repo
+                        
+                        print(f"  -> {repo_url}")
+                        cmd_rpm.append(f"--addrepo={repo_url}")
+                
+                # 执行
+                run_cmd(cmd_rpm)
+
+                # 保存结果
+                new_rpms = [] 
+                built_rpms = glob.glob(os.path.join(rpm_result_dir, "*.rpm"))
+                for rpm in built_rpms:
+                    if "debuginfo" in rpm or rpm.endswith(".src.rpm"): continue
+                    dest = shutil.copy2(rpm, repo_dir)
+                    new_rpms.append(dest)
+                    print(f"-> Saved RPM: {os.path.basename(rpm)}")
+
+                if gpg_key_id:
+                    sign_rpms(repo_dir, new_rpms, gpg_key_id)
+                
+                build_success = True
+                log_source_dir = rpm_result_dir
+
+            except Exception as e:
+                print(f"[{tool_name}] ❌ Build Failed: {e}")
+                build_success = False
+                log_source_dir = work_dir
+
+            finally:
+                try:
+                    logs_dir = os.path.join(repo_dir, ".build_logs")
+                    if not os.path.exists(logs_dir): os.makedirs(logs_dir)
+                    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                    status_str = "SUCCESS" if build_success else "FAILED"
+                    archive_name = f"{pkg_name}-{status_str}-{timestamp}.tar.gz"
+                    archive_path = os.path.join(logs_dir, archive_name)
+                    with tarfile.open(archive_path, "w:gz") as tar:
+                        tar.add(log_source_dir, arcname=f"build-logs-{status_str}")
+                    print(f"[{tool_name}] Log saved: {archive_path}")
+                except Exception as log_err:
+                    print(f"[{tool_name}] Log error: {log_err}")
+
+        if not build_success: return False
+
+        run_cmd(["createrepo_c", "--update", repo_dir])
+        if gpg_key_id: sign_repodata(repo_dir, gpg_key_id)
+            
+        print(f"[{tool_name}] Package '{pkg_name}' done!")
+        return True
+    finally:
+    # 清理自动创建的临时目录
+        if temp_source_created and os.path.exists(temp_source_created):
+            shutil.rmtree(temp_source_created, ignore_errors=True)
+
 def do_build(args):
     return single_build(args)
 
@@ -453,7 +484,7 @@ def main():
 
     # Build
     p_build = subparsers.add_parser("build", help="Build RPM")
-    p_build.add_argument("--source", required=True, help="Source directory containing spec and sources")
+    p_build.add_argument("--source", help="Source directory containing spec and sources")
     p_build.add_argument("--torepo", required=True)
     p_build.add_argument("--spec", help="Specific spec")
     p_build.add_argument("--addrepo", action="append")
