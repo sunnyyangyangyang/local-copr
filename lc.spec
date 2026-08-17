@@ -1,6 +1,6 @@
 Name:           lc
 Version:        2.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Local Copr - A lightweight local RPM build system
 License:        GPLv3+
 URL:            https://github.com/sunnyyangyangyang/local-copr
@@ -44,8 +44,11 @@ install -D -m 644 %{SOURCE3} %{buildroot}%{_datadir}/bash-completion/completions
 %{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
-* Tue Jul 21 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-1
+* Mon Aug 17 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-2
 - Add bash tab completion for lc and lc-add-repo (fixes #4)
+
+* Fri Jul 31 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-1
+- Allow building directly from --spec without requiring --source
 
 * Mon Jul 20 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.0-1
 - Remove lc-rebuild and lc-git tools (chain/rebuild/git features)
