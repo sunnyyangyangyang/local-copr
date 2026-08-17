@@ -1,0 +1,70 @@
+# Bash completion for lc and lc-add-repo (Local Copr)
+# Installed as /usr/share/bash-completion/completions/{lc,lc-add-repo}
+
+_lc() {
+    local cur prev subcmd opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "init remove build" -- "${cur}") )
+        return 0
+    fi
+
+    subcmd="${COMP_WORDS[1]}"
+    case "${subcmd}" in
+        init)   opts="--repo --gpg-key" ;;
+        remove) opts="--repo" ;;
+        build)
+            if [[ "${prev}" == "--storage" ]]; then
+                COMPREPLY=( $(compgen -W "tmpfs tmpfs-tmponly ssd" -- "${cur}") )
+                return 0
+            fi
+            opts="--source --torepo --spec --addrepo --storage --extra-mock-args --enable-network --conf --mock-config"
+            ;;
+        *) return 0 ;;
+    esac
+
+    if [[ "${cur}" == -* ]]; then
+        COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+    else
+        case "${prev}" in
+            --source)      COMPREPLY=( $(compgen -d -- "${cur}") ) ;;
+            --spec|--conf) COMPREPLY=( $(compgen -f -- "${cur}") ) ;;
+            *)             : ;;
+        esac
+    fi
+}
+
+_lc_add_repo() {
+    local cur prev subcmd opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "add remove refresh list" -- "${cur}") )
+        return 0
+    fi
+
+    subcmd="${COMP_WORDS[1]}"
+    case "${subcmd}" in
+        add)    opts="--name --force --no-refresh" ;;
+        remove) opts="--no-refresh" ;;
+        refresh|list) return 0 ;;
+        *)      return 0 ;;
+    esac
+
+    if [[ "${cur}" == -* ]]; then
+        COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+    else
+        case "${prev}" in
+            --name) : ;;
+            *)      COMPREPLY=( $(compgen -d -- "${cur}") ) ;;
+        esac
+    fi
+}
+
+complete -F _lc lc 2>/dev/null || true
+complete -F _lc_add_repo lc-add-repo 2>/dev/null || true

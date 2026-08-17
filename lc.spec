@@ -8,9 +8,11 @@ URL:            https://github.com/sunnyyangyangyang/local-copr
 Source0:        lc.py
 Source1:        lc-add-repo.py
 Source2:        tmpfs_tmponly.py
+Source3:        lc-bash-completion
 
 BuildRequires:  python3-devel
 Requires:       python3
+Suggests:       bash-completion
 Requires:       mock
 Requires:       createrepo_c
 Requires:       gnupg
@@ -29,14 +31,22 @@ install -D -m 755 %{SOURCE0} %{buildroot}%{_bindir}/lc
 install -D -m 755 %{SOURCE1} %{buildroot}%{_bindir}/lc-add-repo
 # Install selective tmpfs plugin for mock
 install -D -m 644 %{SOURCE2} %{buildroot}%{python3_sitelib}/mockbuild/plugins/tmpfs_tmponly.py
+# Install bash completion (loaded on demand by the bash-completion package)
+install -D -m 644 %{SOURCE3} %{buildroot}%{_datadir}/bash-completion/completions/lc
+install -D -m 644 %{SOURCE3} %{buildroot}%{_datadir}/bash-completion/completions/lc-add-repo
 
 %files
 %{_bindir}/lc
 %{_bindir}/lc-add-repo
+%{_datadir}/bash-completion/completions/lc
+%{_datadir}/bash-completion/completions/lc-add-repo
 %{python3_sitelib}/mockbuild/plugins/tmpfs_tmponly.py
 %{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
+* Tue Jul 21 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-1
+- Add bash tab completion for lc and lc-add-repo (fixes #4)
+
 * Mon Jul 20 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.0-1
 - Remove lc-rebuild and lc-git tools (chain/rebuild/git features)
 - Simplify CLI: --source is now required for build

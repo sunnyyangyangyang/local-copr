@@ -71,6 +71,16 @@ sudo chmod +x /usr/local/bin/lc /usr/local/bin/lc-add-repo
 
 **Note:** Manual installation is not recommended for production use. Use the official RPM package instead.
 
+### Bash Completion
+
+The RPM package installs bash tab completion for `lc` and `lc-add-repo` (requires the `bash-completion` package). It completes subcommands, options, and `--storage` values automatically in a new shell session.
+
+For manual installations, source it yourself:
+
+```bash
+source /path/to/lc-bash-completion   # or add to ~/.bashrc
+```
+
 ## Quick Start
 
 ### 1. Create a Local Repository
