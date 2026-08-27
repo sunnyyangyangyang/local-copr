@@ -73,7 +73,7 @@ sudo chmod +x /usr/local/bin/lc /usr/local/bin/lc-add-repo
 
 ### Bash Completion
 
-The RPM package installs bash tab completion for `lc` and `lc-add-repo` (requires the `bash-completion` package). It completes subcommands, options, and `--storage` values automatically in a new shell session.
+The RPM package installs bash tab completion for `lc` and `lc-add-repo` (requires the `bash-completion` package). It completes subcommands, options, and option values (`--source`/`--torepo` → directories, `--spec`/`--conf` → files, `--storage` → backends) automatically in a new shell session; free-form values fall back to bash's default completion.
 
 For manual installations, source it yourself:
 

@@ -16,25 +16,27 @@ _lc() {
     case "${subcmd}" in
         init)   opts="--repo --gpg-key" ;;
         remove) opts="--repo" ;;
-        build)
-            if [[ "${prev}" == "--storage" ]]; then
-                COMPREPLY=( $(compgen -W "tmpfs tmpfs-tmponly ssd" -- "${cur}") )
-                return 0
-            fi
-            opts="--source --torepo --spec --addrepo --storage --extra-mock-args --enable-network --conf --mock-config"
-            ;;
+        build)  opts="--source --torepo --spec --addrepo --storage --extra-mock-args --enable-network --conf --mock-config" ;;
         *) return 0 ;;
     esac
 
+    # Flag position: complete the subcommand's options.
     if [[ "${cur}" == -* ]]; then
         COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-    else
-        case "${prev}" in
-            --source)      COMPREPLY=( $(compgen -d -- "${cur}") ) ;;
-            --spec|--conf) COMPREPLY=( $(compgen -f -- "${cur}") ) ;;
-            *)             : ;;
-        esac
+        return 0
     fi
+
+    # Value position: what we can offer depends on which flag precedes us.
+    case "${prev}" in
+        --source|--torepo)   COMPREPLY=( $(compgen -d -- "${cur}") ) ;;              # repo directory
+        --spec|--conf)       COMPREPLY=( $(compgen -f -- "${cur}") ) ;;              # file
+        --storage)           COMPREPLY=( $(compgen -W "tmpfs tmpfs-tmponly ssd" -- "${cur}") ) ;;
+        --repo|--gpg-key|--addrepo|--extra-mock-args|--mock-config)
+                             COMPREPLY=( $(compgen -o default -- "${cur}") ) ;;      # free-form value: fall back to bash's default completion
+        *)  # not a value slot (after the subcommand, after a store_true flag, or
+            # after an already-consumed value): offer the option list again.
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") ) ;;
+    esac
 }
 
 _lc_add_repo() {
@@ -50,10 +52,11 @@ _lc_add_repo() {
 
     subcmd="${COMP_WORDS[1]}"
     case "${subcmd}" in
-        add)    opts="--name --force --no-refresh" ;;
-        remove) opts="--no-refresh" ;;
-        refresh|list) return 0 ;;
-        *)      return 0 ;;
+        add)     opts="--name --force --no-refresh" ;;
+        remove)  opts="--no-refresh" ;;
+        # No options; single positional is the lc repo path -> directory completion.
+        refresh) COMPREPLY=( $(compgen -d -- "${cur}") ); return 0 ;;
+        list|*)  return 0 ;;
     esac
 
     if [[ "${cur}" == -* ]]; then
