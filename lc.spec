@@ -1,6 +1,6 @@
 Name:           lc
 Version:        2.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Local Copr - A lightweight local RPM build system
 License:        GPLv3+
 URL:            https://github.com/sunnyyangyangyang/local-copr
@@ -44,6 +44,11 @@ install -D -m 644 %{SOURCE3} %{buildroot}%{_datadir}/bash-completion/completions
 %{python3_sitelib}/mockbuild/plugins/__pycache__/tmpfs_tmponly.*.py*
 
 %changelog
+* Wed Aug 27 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-3
+- Fix bash completion dying at value positions (--torepo, after store_true flags)
+- Complete --source/--torepo as directories; free-form values fall back to bash default completion
+- lc-add-repo refresh now completes its repo-path argument
+
 * Mon Aug 17 2026 Yuanxi Yang <yxh9956@gmail.com> - 2.1-2
 - Add bash tab completion for lc and lc-add-repo (fixes #4)
 
